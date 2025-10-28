@@ -1,0 +1,63 @@
+prg       =_{SOI~exp_list~EOI}
+exp_list  =_{nline*~(exp~nline+)*~exp?}
+exp       = {asexp|train|fun|string|terms}
+
+asexp     = {value~":"~exp}
+
+train     = {terms?~"|"?~fn_list~"|"~terms}
+
+dtrain    = {(value|terms)~"|"~fn_list}
+fn_list   = {texp+}
+texp      =_{dblock|block_exp|dtrain|fnvalue|fnblock|cfn|op_exp}
+dblock    = {block_exp~"|"~texp}
+block_exp = {"("~texp+~")"}
+cfn       = {(op_exp|value|block_exp|fnblock)~cn}
+fun       = {fun_om|fun_dm|fun_d|fun_m|fun_l}
+fun_om    =_{texp~terms}
+fun_dm    =_{terms~texp~terms}
+fun_d     =_{terms~"|"~texp~terms}
+fun_m     =_{texp~"|"~terms}
+fun_l     =_{terms?~texp~terms}
+
+op_exp    =_{mop|op}
+mop       = {op~":"}
+op        = {
+  |"+"|"-"|"×"|"÷"
+  |"¯"  // max
+  |"_"  // min
+  |"="  // eq
+  |"&"
+  |"!"  // range 
+  |"ǁ"
+}
+
+cn        = {
+   "/"  // fold
+  |"\\" // scanl
+}
+
+terms     = {term+}
+term      =_{ft|int|value|string|block|fnblockl|listblock}
+
+fnblockl  =_{fnblock|fnblockm|fnblocko}
+fnblock   = {"{" ~(exp_list)~ "}"}
+fnblockm  = {"{" ~(fn_list)~"|}"}
+fnblocko  = {"{|"~(fn_list)~"|}"}
+listblock = {"[" ~(exp_list)~ "]"}
+
+block     = {"("~exp_list~")"}
+value     =@{letter+~(number|"_")*}
+fnvalue   =@{letter+~(number|"_")*}
+
+int       =@{"-"?~ascii+}
+ft        =@{ascii+~"."~ascii*}
+
+string    =@{"\""~("\"\""|(!"\""~ANY))*~"\""}
+
+nline     =_{NEWLINE|";"}
+ascii     =_{ASCII_DIGIT}
+number    =_{NUMBER}
+letter    =_{LETTER|OTHER_SYMBOL}
+
+WHITESPACE=_{" "|"\t"}
+COMMENT   =_{"--"~(!"\n"~ANY)*}
