@@ -154,7 +154,7 @@ pub fn byte_to_fn(by: u8) -> FN {
     match by {
         FNPLUS => FN::Plus,
         FNMINUS => FN::Minus,
-        FNMUL => FN::Mult,
+        FNMULT => FN::Mult,
         FNDIV => FN::Div,
         FNMAX => FN::Max,
         FNMIN => FN::Min,

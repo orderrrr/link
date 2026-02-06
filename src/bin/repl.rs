@@ -1,7 +1,7 @@
 #![allow(unused_imports, unused_variables)]
 
 use rustyline::error::ReadlineError;
-use rustyline::Editor;
+use rustyline::DefaultEditor;
 
 use cfg_if::cfg_if;
 
@@ -10,7 +10,7 @@ use l::vm::V;
 
 // ANCHOR: repl
 fn main() {
-    let mut rl = Editor::<()>::new();
+    let mut rl = DefaultEditor::new().unwrap();
     println!("l prompt. Expressions are line evaluated.");
     loop {
         let readline = rl.readline(">> ");
@@ -25,7 +25,7 @@ fn main() {
                         let mut vm = V::new(it);
                         vm.r();
                         println!("{}", vm.pop_last());
-                    },
+                    }
                     Err(err) => println!("{}", err),
                 }
             }

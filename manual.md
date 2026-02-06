@@ -23,12 +23,10 @@ Here is a simple example of a link program
 ```
 
 ###### What does this do?
-
 Well this program:
 takes all numbers from 0 -> 1000 and sums up the total.
 
 ###### How does it work?
-
 To understand how it works we first need to understand the order of execution:<br>
 First a program is formed, (list of expressions) in this case just one expression [`+/!|1000`]
 Then expressions are formed, this is a monadic train so it needs a train and a unit:<br>
@@ -42,7 +40,7 @@ Programs are read from left to right like any language, however trains are read 
 So our program would do the following:
 1. `!1000` - similar to range in pythons `range(1000)`
 2. `+/` - `/` receives the range we generated and essentially does a [reduce/fold]("https://en.wikipedia.org/wiki/Fold_(higher-order_function)"))<br>
-  the `+` is the function the fold will do on the input. so in this case
+  the `+` is the function the fold will do on the input. so in this case we add all the numbers from 0-1000 together
 
 That's it! pretty simple function represented in a very readable way once you get an understanding of the symbols meaning.
 

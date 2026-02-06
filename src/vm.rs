@@ -36,8 +36,8 @@ impl C {
 pub struct V {
     b: B,
 
-    s: [NN; STACK_SIZE],
-    ptr: usize,
+    s: Vec<NN>,
+    last_popped: Option<NN>,
 
     context: [C; STACK_SIZE],
     cptr: usize,
@@ -47,8 +47,8 @@ impl V {
     pub fn new(b: B) -> Self {
         Self {
             b,
-            s: unsafe { std::mem::zeroed() },
-            ptr: 0,
+            s: Vec::with_capacity(STACK_SIZE),
+            last_popped: None,
             context: unsafe { std::mem::zeroed() },
             cptr: 0,
         }
@@ -70,7 +70,7 @@ impl V {
                     let const_idx = u8_to_u(self.b.op[ip], self.b.op[ip + 1]);
                     ip += 2;
                     self.push(self.b.var[const_idx].clone());
-                    debug_println!("pushed: {}", self.s[self.ptr - 1]);
+                    debug_println!("pushed: {}", self.s.last().unwrap());
                 }
                 OP::POP => {
                     println!("\n\n-------- POP --------");
@@ -107,8 +107,8 @@ impl V {
                     }
 
                     println!("-------- RESULT");
-                    println!("ptr: {}", self.ptr);
-                    println!("top of stack: {}", self.s[self.ptr - 1]);
+                    println!("ptr: {}", self.s.len());
+                    println!("top of stack: {}", self.s.last().unwrap());
                     ip += 2;
                 }
                 OP::DBL(_) => {
@@ -123,8 +123,8 @@ impl V {
 
                     println!("-------- RESULT");
                     println!("cget: {:?}", self.cget());
-                    println!("ptr: {}", self.ptr);
-                    println!("top of stack: {}", self.s[self.ptr - 1]);
+                    println!("ptr: {}", self.s.len());
+                    println!("top of stack: {}", self.s.last().unwrap());
                     ip += 2;
                 }
                 OP::MBL(_) => {
@@ -136,8 +136,8 @@ impl V {
                     self.cpush(C::new(us, BL::MBL));
                     println!("-------- RESULT");
                     println!("cget: {:?}", self.cget());
-                    println!("ptr: {}", self.ptr);
-                    println!("top of stack: {}", self.s[self.ptr - 1]);
+                    println!("ptr: {}", self.s.len());
+                    println!("top of stack: {}", self.s.last().unwrap());
 
                     ip += 2;
                 }
@@ -145,17 +145,18 @@ impl V {
                     let mo = byte_to_fn(self.b.op[ip]);
                     println!("\n\n-------- MO {} --------", mo);
 
-                    println!("ptr: {}", self.ptr);
-                    println!("top of stack: {}", self.s[self.ptr - 1]);
+                    println!("ptr: {}", self.s.len());
+                    println!("top of stack: {}", self.s.last().unwrap());
 
                     // TODO - fix messy code
-                    match self.cget().t {
-                        BL::DBL => self.ptr -= 1,
-                        _ => (),
-                    }
+                    // In a DBL context, temporarily hide the extra duplicated value
+                    let dbl_stashed = match self.cget().t {
+                        BL::DBL => Some(self.s.pop().expect("stack underflow")),
+                        _ => None,
+                    };
 
-                    println!("ptr: {}", self.ptr);
-                    println!("top of stack: {}", self.s[self.ptr - 1]);
+                    println!("ptr: {}", self.s.len());
+                    println!("top of stack: {}", self.s.last().unwrap());
 
                     let co = byte_to_op(self.b.op[ip + 1]).unwrap();
                     let co = op_to_co(co, self.b.op[ip + 2]);
@@ -163,8 +164,8 @@ impl V {
                     self.cmo(co, mo, ip);
 
                     println!("-------- RESULT");
-                    println!("ptr: {}", self.ptr);
-                    println!("top of stack: {}", self.s[self.ptr - 1]);
+                    println!("ptr: {}", self.s.len());
+                    println!("top of stack: {}", self.s.last().unwrap());
 
                     match co {
                         Some(_) => ip += 3,
@@ -172,9 +173,9 @@ impl V {
                     }
 
                     // TODO - fix messy code
-                    match self.cget().t {
-                        BL::DBL => self.ptr += 1,
-                        _ => (),
+                    // Restore the stashed value after the monadic op
+                    if let Some(stashed) = dbl_stashed {
+                        self.s.push(stashed);
                     }
                 }
                 OP::DO(_) => {
@@ -186,7 +187,11 @@ impl V {
 
                     self.cdo(co, dfn, ip);
 
-                    self.ptr += 1;
+                    // The old code did ptr += 1 after cdo, which re-exposed
+                    // a stale slot in the fixed array. DBLEND expects this
+                    // extra element on the stack when cleaning up. Duplicate
+                    // the result to preserve the same stack depth.
+                    self.dup();
 
                     match co {
                         Some(_) => ip += 3,
@@ -194,8 +199,8 @@ impl V {
                     }
 
                     println!("-------- RESULT");
-                    println!("ptr: {}", self.ptr);
-                    println!("top of stack: {}", self.s[self.ptr - 1]);
+                    println!("ptr: {}", self.s.len());
+                    println!("top of stack: {}", self.s.last().unwrap());
                 }
                 OP::CLVAR => {
                     println!("\n\n-------- CLVAR --------");
@@ -249,15 +254,17 @@ impl V {
                     println!("-------- RESULT");
                     println!("cptr = {}", self.cptr);
                     println!("cip = {}", c.ip);
-                    println!("ptr: {}", self.ptr);
-                    println!("top of stack: {}", self.s[self.ptr - 1]);
+                    println!("ptr: {}", self.s.len());
+                    if let Some(top) = self.s.last() {
+                        println!("top of stack: {}", top);
+                    }
                     ip = c.ip;
                 }
                 OP::GETL => {
                     println!("\n\n-------- GETL --------");
 
-                    debug_println!("current lhs: {}", self.s[self.ptr - 1]);
-                    debug_println!("current rhs: {}", self.s[self.ptr - 2]);
+                    debug_println!("current lhs: {}", self.s.last().unwrap());
+                    debug_println!("current rhs: {}", self.s[self.s.len() - 2]);
                     self.push(
                         self.b.var[self.b.lookup.get("w").unwrap().to_owned() as usize].clone(),
                     );
@@ -265,8 +272,8 @@ impl V {
                 OP::GETR => {
                     println!("\n\n-------- GETR --------");
 
-                    debug_println!("current lhs: {}", self.s[self.ptr - 1]);
-                    debug_println!("current rhs: {}", self.s[self.ptr - 2]);
+                    debug_println!("current lhs: {}", self.s.last().unwrap());
+                    debug_println!("current rhs: {}", self.s[self.s.len() - 2]);
                     self.push(
                         self.b.var[self.b.lookup.get("a").unwrap().to_owned() as usize].clone(),
                     );
@@ -348,7 +355,7 @@ impl V {
     // TODO - do the operator, monadic and type matching inside global do function
     pub fn get_fun(&mut self, fun: FN, _ip: usize) -> (fn(&NN) -> NN, fn(&NN, &NN) -> NN) {
         match fun {
-            FN::Bang => (mo_bang, do_temp),
+            FN::Bang => (mo_bang, do_mathmod),
             FN::Eq => (mo_eq, do_temp),
             FN::Div => (mo_temp, do_temp),
             FN::Max => (mo_temp, do_max),
@@ -365,20 +372,17 @@ impl V {
     }
 
     pub fn push(&mut self, node: NN) {
-        self.s[self.ptr] = node;
-        self.ptr += 1;
+        self.s.push(node);
     }
 
     pub fn pop(&mut self) -> NN {
-        // ignoring the potential of stack underflow
-        // cloning rather than mem::replace for easier testing
-        let node = self.s[self.ptr - 1].clone();
-        self.ptr -= 1;
+        let node = self.s.pop().expect("stack underflow");
+        self.last_popped = Some(node.clone());
         node
     }
 
     pub fn get(&mut self) -> NN {
-        self.s[self.ptr - 1].clone()
+        self.s.last().expect("stack underflow").clone()
     }
 
     pub fn cpush(&mut self, node: C) {
@@ -403,22 +407,23 @@ impl V {
 
     pub fn dup(&mut self) {
         println!("!!!!!! DUP !!!!!!");
-        let node = self.s[self.ptr - 1].clone();
+        let node = self.s.last().expect("stack underflow").clone();
         println!("NODE IS: {}", node);
         self.push(node);
     }
 
     pub fn ddup(&mut self) {
         println!("!!!!!! DDUP !!!!!!");
-        let node = self.s[self.ptr - 2].clone();
+        let len = self.s.len();
+        let node = self.s[len - 2].clone();
         println!("NODE IS: {}", node);
         self.push(node);
     }
 
     pub fn pop_last(&self) -> &NN {
-        // the stack pointer points to the next "free" space,
-        // which also holds the most recently popped element
-        &self.s[self.ptr]
+        // After execution, POP removes the final result from the stack.
+        // We stash it in last_popped so callers can retrieve it.
+        self.last_popped.as_ref().expect("no result available")
     }
 }
 
