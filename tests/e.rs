@@ -23,7 +23,8 @@ fn parse_test_lib(i: &str, ast: Vec<NN>, res: &str, exp: B, last: NN) {
 fn assert_pop_last(byte_code: B, node: NN) {
     let mut vm = V::new(byte_code);
     vm.r();
-    assert_eq!(&node, vm.pop_last());
+    assert!(vm.error.is_none(), "VM error: {}", vm.error.unwrap());
+    assert_eq!(&node, vm.pop_last().unwrap());
 }
 
 // TODO: test files use old syntax (%, #, .) not in current grammar
@@ -199,7 +200,8 @@ fn assert_pop_last_st(source: &str, node: NN) {
     debug_println!("byte code: {:?}", byte_code);
     let mut vm = V::new(byte_code.unwrap());
     vm.r();
-    assert_eq!(&node, vm.pop_last());
+    assert!(vm.error.is_none(), "VM error: {}", vm.error.unwrap());
+    assert_eq!(&node, vm.pop_last().unwrap());
 }
 
 // #[test]

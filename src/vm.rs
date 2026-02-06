@@ -1,4 +1,5 @@
 use std::cmp;
+use std::fmt;
 
 use debug_print::debug_println;
 use rayon::prelude::*;
@@ -12,6 +13,50 @@ use crate::{
 };
 
 const STACK_SIZE: usize = 512;
+
+// ---------------------------------------------------------------------------
+// VM error type
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct VMError {
+    pub msg: String,
+}
+
+impl VMError {
+    pub fn new(msg: impl Into<String>) -> Self {
+        VMError { msg: msg.into() }
+    }
+}
+
+impl fmt::Display for VMError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "runtime error: {}", self.msg)
+    }
+}
+
+/// Shorthand for a type name we can show to users.
+fn type_name(n: &NN) -> &'static str {
+    match &n.n {
+        E::INT(_) => "int",
+        E::FT(_) => "float",
+        E::BOOL(_) => "bool",
+        E::ST(_) => "string",
+        E::LIST(_) => "list",
+        E::VAL(_) => "value",
+        E::FVAL(_) => "fnvalue",
+        _ => "node",
+    }
+}
+
+pub type VmRes = Result<NN, VMError>;
+
+type MonadicFn = fn(&NN) -> VmRes;
+type DyadicFn = fn(&NN, &NN) -> VmRes;
+
+// ---------------------------------------------------------------------------
+// Context stack
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Copy, Clone)]
 pub enum BL {
@@ -33,11 +78,16 @@ impl C {
     }
 }
 
+// ---------------------------------------------------------------------------
+// VM
+// ---------------------------------------------------------------------------
+
 pub struct V {
     b: B,
 
     s: Vec<NN>,
     last_popped: Option<NN>,
+    pub error: Option<VMError>,
 
     context: [C; STACK_SIZE],
     cptr: usize,
@@ -49,12 +99,19 @@ impl V {
             b,
             s: Vec::with_capacity(STACK_SIZE),
             last_popped: None,
+            error: None,
             context: unsafe { std::mem::zeroed() },
             cptr: 0,
         }
     }
 
     pub fn r(&mut self) {
+        if let Err(e) = self.run() {
+            self.error = Some(e);
+        }
+    }
+
+    fn run(&mut self) -> Result<(), VMError> {
         let mut ip = 0;
         while ip < self.b.op.len() {
             let iaddr = ip;
@@ -148,7 +205,6 @@ impl V {
                     println!("ptr: {}", self.s.len());
                     println!("top of stack: {}", self.s.last().unwrap());
 
-                    // TODO - fix messy code
                     // In a DBL context, temporarily hide the extra duplicated value
                     let dbl_stashed = match self.cget().t {
                         BL::DBL => Some(self.s.pop().expect("stack underflow")),
@@ -161,7 +217,7 @@ impl V {
                     let co = byte_to_op(self.b.op[ip + 1]).unwrap();
                     let co = op_to_co(co, self.b.op[ip + 2]);
 
-                    self.cmo(co, mo, ip);
+                    self.cmo(co, mo, ip)?;
 
                     println!("-------- RESULT");
                     println!("ptr: {}", self.s.len());
@@ -172,7 +228,6 @@ impl V {
                         None => ip += 1,
                     }
 
-                    // TODO - fix messy code
                     // Restore the stashed value after the monadic op
                     if let Some(stashed) = dbl_stashed {
                         self.s.push(stashed);
@@ -185,12 +240,8 @@ impl V {
                     let co = byte_to_op(self.b.op[ip + 1]).unwrap();
                     let co = op_to_co(co, self.b.op[ip + 2]);
 
-                    self.cdo(co, dfn, ip);
+                    self.cdo(co, dfn, ip)?;
 
-                    // The old code did ptr += 1 after cdo, which re-exposed
-                    // a stale slot in the fixed array. DBLEND expects this
-                    // extra element on the stack when cleaning up. Duplicate
-                    // the result to preserve the same stack depth.
                     self.dup();
 
                     match co {
@@ -211,7 +262,6 @@ impl V {
 
                     let c = self.cpop();
 
-                    // TODO - delete or uncomment
                     match c.t {
                         BL::DBL => {
                             println!("\n\n-------- DBLEND --------");
@@ -277,38 +327,54 @@ impl V {
                     self.push(
                         self.b.var[self.b.lookup.get("a").unwrap().to_owned() as usize].clone(),
                     );
-                    // self.ptr -= 1;
-                    // debug_println!("{:?}", self.s[self.ptr]);
-                    // let rhs = self.pop();
-                    // self.rep(rhs);
                 }
-                _ => panic!("unimplemented instruction: {:?}", op),
+                _ => return Err(VMError::new(format!("unimplemented instruction: {:?}", op))),
             }
         }
+        Ok(())
     }
 
-    pub fn cmo(&mut self, co: Option<CN>, fun: FN, _ip: usize) {
+    pub fn cmo(&mut self, co: Option<CN>, fun: FN, _ip: usize) -> Result<(), VMError> {
         match co {
             None => {
                 let rhs = self.pop();
                 debug_println!("cmo: rhs: {}", rhs);
-                let (fun, _) = self.get_fun(fun, _ip);
-                self.push(fun(&rhs));
+                let (fun, _) = Self::get_fun(fun);
+                let result = fun(&rhs)?;
+                self.push(result);
             }
             Some(CN::Fold) => {
                 let rhs = self.pop();
                 debug_println!("cmo: rhs: {}", rhs);
-                let (_, fun) = self.get_fun(fun, _ip);
+                let (_, fun) = Self::get_fun(fun);
                 match rhs.n {
-                    E::LIST(l) => self.push(l.into_iter().reduce(|r, a| fun(&r, &a)).unwrap()),
-                    _ => panic!("Unknown instruction"),
+                    E::LIST(l) => {
+                        let mut iter = l.into_iter();
+                        let first = iter
+                            .next()
+                            .ok_or_else(|| VMError::new("fold on empty list"))?;
+                        let result = iter.try_fold(first, |acc, a| fun(&acc, &a))?;
+                        self.push(result);
+                    }
+                    _ => {
+                        return Err(VMError::new(format!(
+                            "fold (/) expects a list, got {}",
+                            type_name(&rhs)
+                        )));
+                    }
                 };
             }
-            _ => panic!("unknown instruction: {:?}", co),
+            Some(other) => {
+                return Err(VMError::new(format!(
+                    "combinator {} not supported in monadic context",
+                    other
+                )));
+            }
         }
+        Ok(())
     }
 
-    pub fn cdo(&mut self, co: Option<CN>, fun: FN, _ip: usize) {
+    pub fn cdo(&mut self, co: Option<CN>, fun: FN, _ip: usize) -> Result<(), VMError> {
         match co {
             None => {
                 debug_println!("cdo None");
@@ -317,12 +383,9 @@ impl V {
                 debug_println!("cdo lhs: {}", lhs);
                 debug_println!("cdo rhs: {}", rhs);
 
-                let (_, fun) = self.get_fun(fun, _ip);
-                self.push(fun(&lhs, &rhs));
-                // match rhs.n {
-                //     E::INT(_) => self.push(func.1(lhs, rhs)),
-                //     _ => panic!("Unknown instruction"),
-                // }
+                let (_, fun) = Self::get_fun(fun);
+                let result = fun(&lhs, &rhs)?;
+                self.push(result);
             }
             Some(CN::ScanL) => {
                 debug_println!("cdo ScanL");
@@ -331,39 +394,56 @@ impl V {
                 debug_println!("cdo rhs: {}", rhs);
                 debug_println!("cdo lhs: {}", lhs);
 
-                let (_, fun) = self.get_fun(fun, _ip);
+                let (_, fun) = Self::get_fun(fun);
 
                 match lhs.n {
-                    E::LIST(l) => self.push(NN::nd(E::LIST(
-                        l.into_iter()
+                    E::LIST(l) => {
+                        let results: Result<Vec<NN>, VMError> = l
+                            .into_iter()
                             .map(|w| match rhs.n.clone() {
-                                E::LIST(r) => NN::nd(E::LIST(
-                                    r.into_iter().map(|a| fun(&w.clone(), &a)).collect(),
-                                )),
+                                E::LIST(r) => {
+                                    let inner: Result<Vec<NN>, VMError> =
+                                        r.into_iter().map(|a| fun(&w.clone(), &a)).collect();
+                                    Ok(NN::nd(E::LIST(inner?)))
+                                }
                                 E::INT(_) => fun(&w, &rhs.clone()),
-                                _ => panic!("Unknown instruction"),
+                                _ => Err(VMError::new(format!(
+                                    "scan-left (\\) rhs: expected list or int, got {}",
+                                    type_name(&rhs)
+                                ))),
                             })
-                            .collect(),
-                    ))),
-                    _ => panic!("Unknown instruction"),
+                            .collect();
+                        self.push(NN::nd(E::LIST(results?)));
+                    }
+                    _ => {
+                        return Err(VMError::new(format!(
+                            "scan-left (\\) lhs: expected list, got {}",
+                            type_name(&lhs)
+                        )));
+                    }
                 }
             }
-            _ => panic!("unknown instruction"),
+            Some(other) => {
+                return Err(VMError::new(format!(
+                    "combinator {} not supported in dyadic context",
+                    other
+                )));
+            }
         }
+        Ok(())
     }
 
-    // TODO - do the operator, monadic and type matching inside global do function
-    pub fn get_fun(&mut self, fun: FN, _ip: usize) -> (fn(&NN) -> NN, fn(&NN, &NN) -> NN) {
+    pub fn get_fun(fun: FN) -> (MonadicFn, DyadicFn) {
         match fun {
             FN::Bang => (mo_bang, do_mathmod),
-            FN::Eq => (mo_eq, do_temp),
-            FN::Div => (mo_temp, do_temp),
-            FN::Max => (mo_temp, do_max),
+            FN::Eq => (mo_eq, do_noimpl),
+            FN::Div => (mo_noimpl, do_noimpl),
+            FN::Max => (mo_noimpl, do_max),
             FN::Min => (mo_min, do_min),
-            FN::Amp => (mo_temp, do_amp),
-            FN::Plus => (mo_temp, do_plus),
+            FN::Amp => (mo_noimpl, do_amp),
+            FN::Plus => (mo_noimpl, do_plus),
             FN::Minus => (mo_minus, do_minus),
-            FN::Mult => (mo_temp, do_temp),
+            FN::Mult => (mo_noimpl, do_noimpl),
         }
     }
 
@@ -398,8 +478,6 @@ impl V {
     }
 
     pub fn cpop(&mut self) -> C {
-        // ignoring the potential of stack underflow
-        // cloning rather than mem::replace for easier testing
         let node = self.context[self.cptr - 1].clone();
         self.cptr -= 1;
         node
@@ -420,53 +498,94 @@ impl V {
         self.push(node);
     }
 
-    pub fn pop_last(&self) -> &NN {
-        // After execution, POP removes the final result from the stack.
-        // We stash it in last_popped so callers can retrieve it.
-        self.last_popped.as_ref().expect("no result available")
+    pub fn pop_last(&self) -> Option<&NN> {
+        self.last_popped.as_ref()
     }
 }
 
-pub fn mo_temp(_rhs: &NN) -> NN {
-    panic!("Unknown instruction")
+// ---------------------------------------------------------------------------
+// Placeholder for unimplemented monadic / dyadic ops
+// ---------------------------------------------------------------------------
+
+pub fn mo_noimpl(rhs: &NN) -> VmRes {
+    Err(VMError::new(format!(
+        "monadic operation not implemented for {}",
+        type_name(rhs)
+    )))
 }
 
-pub fn mo_bang(rhs: &NN) -> NN {
+pub fn do_noimpl(lhs: &NN, rhs: &NN) -> VmRes {
+    Err(VMError::new(format!(
+        "dyadic operation not implemented for {} and {}",
+        type_name(lhs),
+        type_name(rhs)
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// Monadic built-ins
+// ---------------------------------------------------------------------------
+
+pub fn mo_bang(rhs: &NN) -> VmRes {
     match rhs.n {
-        E::INT(i) => NN::nd(E::LIST((0..i).map(|el| NN::nd(E::INT(el))).collect())),
-        _ => panic!("Unknown instruction"),
+        E::INT(i) => Ok(NN::nd(E::LIST(
+            (0..i).map(|el| NN::nd(E::INT(el))).collect(),
+        ))),
+        _ => Err(VMError::new(format!(
+            "! (range) expects int, got {}",
+            type_name(rhs)
+        ))),
     }
 }
 
-pub fn mo_minus(rhs: &NN) -> NN {
+pub fn mo_minus(rhs: &NN) -> VmRes {
     match rhs.n {
-        E::INT(i) => NN::nd(E::INT(-i)),
-        _ => panic!("Unknown instruction"),
+        E::INT(i) => Ok(NN::nd(E::INT(-i))),
+        E::FT(f) => Ok(NN::nd(E::FT(-f))),
+        _ => Err(VMError::new(format!(
+            "- (negate) expects int or float, got {}",
+            type_name(rhs)
+        ))),
     }
 }
 
-pub fn mo_eq(rhs: &NN) -> NN {
+pub fn mo_eq(rhs: &NN) -> VmRes {
     match rhs.clone().n {
-        E::INT(i) => NN::nd(E::BOOL(i == 0)),
-        E::LIST(l) => NN::nd(E::LIST(
-            l.into_iter()
+        E::INT(i) => Ok(NN::nd(E::BOOL(i == 0))),
+        E::LIST(l) => {
+            let results: Result<Vec<NN>, VMError> = l
+                .into_iter()
                 .map(|a| match a.n {
-                    E::INT(i) => NN::nd(E::BOOL(i == 0)),
+                    E::INT(i) => Ok(NN::nd(E::BOOL(i == 0))),
                     E::LIST(_) => mo_eq(&a),
-                    _ => panic!("Unknown type"),
+                    _ => Err(VMError::new(format!(
+                        "= (boolean flip) expects int inside list, got {}",
+                        type_name(&a)
+                    ))),
                 })
-                .collect(),
-        )),
-        _ => panic!("Unknown instruction"),
+                .collect();
+            Ok(NN::nd(E::LIST(results?)))
+        }
+        _ => Err(VMError::new(format!(
+            "= (boolean flip) expects int or list, got {}",
+            type_name(rhs)
+        ))),
     }
 }
 
-pub fn mo_min(rhs: &NN) -> NN {
+pub fn mo_min(rhs: &NN) -> VmRes {
     match rhs.clone().n {
-        E::FT(i) => NN::nd(E::INT(i.floor() as i32)),
-        _ => panic!("Unknown instruction: {}", rhs),
+        E::FT(i) => Ok(NN::nd(E::INT(i.floor() as i32))),
+        _ => Err(VMError::new(format!(
+            "_ (floor) expects float, got {}",
+            type_name(rhs)
+        ))),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Dyadic helpers
+// ---------------------------------------------------------------------------
 
 pub fn bool_to_int(b: bool) -> i32 {
     match b {
@@ -475,105 +594,113 @@ pub fn bool_to_int(b: bool) -> i32 {
     }
 }
 
-pub fn do_conversion(lhs: &NN, rhs: &NN, do_target: fn(&NN, &NN) -> NN) -> Option<NN> {
+pub fn do_conversion(lhs: &NN, rhs: &NN, do_target: DyadicFn) -> VmRes {
     match (lhs.clone().n, rhs.clone().n) {
-        (E::INT(_), E::INT(_)) => Some(do_target(lhs, rhs)),
-        (E::BOOL(_), E::BOOL(_)) => Some(do_target(lhs, rhs)),
-        (E::LIST(l), E::LIST(r)) => match l.len() == r.len() {
-            true => Some(NN::nd(E::LIST(
-                l.par_iter().zip(r).map(|(l, r)| do_target(l, &r)).collect(),
-            ))),
-            false => panic!("Unknown"),
-        },
-        _ => None,
-    }
-}
-
-pub fn do_temp(_lhs: &NN, _rhs: &NN) -> NN {
-    panic!("Unknown instruction")
-}
-
-pub fn do_mathmod(lhs: &NN, rhs: &NN) -> NN {
-    match lhs.n {
-        E::INT(w) => match rhs.n {
-            E::INT(a) => NN::nd(E::INT(a % w)),
-            _ => panic!("Unknown instruction"),
-        },
-        _ => match do_conversion(lhs, rhs, do_mathmod) {
-            Some(n) => n,
-            None => panic!("Unknown type"),
-        },
-    }
-}
-
-pub fn do_mathdiv(lhs: &NN, rhs: &NN) -> NN {
-    println!("math div, lhs: {}; rhs: {}", lhs, rhs);
-    match (lhs.clone().n, rhs.clone().n) {
-        (E::INT(w), E::INT(a)) => NN::nd(E::FT((a as f64) / (w as f64))),
-        _ => match do_conversion(lhs, rhs, do_mathmod) {
-            Some(n) => n,
-            None => panic!("Unknown type"),
-        },
-    }
-}
-
-pub fn do_max(lhs: &NN, rhs: &NN) -> NN {
-    match (lhs.n.clone(), rhs.n.clone()) {
-        (E::INT(w), E::INT(a)) => NN::nd(E::INT(cmp::max(a, w))),
-        (E::BOOL(w), E::BOOL(a)) => NN::nd(E::BOOL(w || a)),
-        _ => match do_conversion(lhs, rhs, do_max) {
-            Some(n) => n,
-            None => panic!("Unknown type"),
-        },
-    }
-}
-
-pub fn do_min(lhs: &NN, rhs: &NN) -> NN {
-    match (lhs.n.clone(), rhs.n.clone()) {
-        (E::INT(w), E::INT(a)) => NN::nd(E::INT(cmp::min(a, w))),
-        _ => match do_conversion(lhs, rhs, do_max) {
-            Some(n) => n,
-            None => panic!("Unknown type"),
-        },
-    }
-}
-
-pub fn do_amp(lhs: &NN, rhs: &NN) -> NN {
-    match (lhs.clone().n, rhs.clone().n) {
-        (E::LIST(l), E::LIST(a)) => NN::nd(E::LIST(l.into_iter().enumerate().fold(
-            Vec::new(),
-            |mut r: Vec<NN>, (i, w)| match w.n {
-                E::BOOL(true) => {
-                    r.push(a[i].clone());
-                    r
-                }
-                _ => r,
-            },
+        (E::INT(_), E::INT(_)) => do_target(lhs, rhs),
+        (E::BOOL(_), E::BOOL(_)) => do_target(lhs, rhs),
+        (E::LIST(l), E::LIST(r)) => {
+            if l.len() != r.len() {
+                return Err(VMError::new(format!(
+                    "list length mismatch: {} vs {}",
+                    l.len(),
+                    r.len()
+                )));
+            }
+            let results: Result<Vec<NN>, VMError> =
+                l.par_iter().zip(r).map(|(l, r)| do_target(l, &r)).collect();
+            Ok(NN::nd(E::LIST(results?)))
+        }
+        _ => Err(VMError::new(format!(
+            "type mismatch: {} and {}",
+            type_name(lhs),
+            type_name(rhs)
         ))),
-        _ => panic!("Unknown instruction"),
     }
 }
 
-pub fn do_plus(lhs: &NN, rhs: &NN) -> NN {
+// ---------------------------------------------------------------------------
+// Dyadic built-ins
+// ---------------------------------------------------------------------------
+
+pub fn do_mathmod(lhs: &NN, rhs: &NN) -> VmRes {
+    match (&lhs.n, &rhs.n) {
+        (E::INT(w), E::INT(a)) => {
+            if *w == 0 {
+                return Err(VMError::new("modulo by zero"));
+            }
+            Ok(NN::nd(E::INT(a % w)))
+        }
+        _ => do_conversion(lhs, rhs, do_mathmod),
+    }
+}
+
+pub fn do_mathdiv(lhs: &NN, rhs: &NN) -> VmRes {
+    match (&lhs.n, &rhs.n) {
+        (E::INT(w), E::INT(a)) => {
+            if *w == 0 {
+                return Err(VMError::new("division by zero"));
+            }
+            Ok(NN::nd(E::FT((*a as f64) / (*w as f64))))
+        }
+        _ => do_conversion(lhs, rhs, do_mathdiv),
+    }
+}
+
+pub fn do_max(lhs: &NN, rhs: &NN) -> VmRes {
+    match (&lhs.n, &rhs.n) {
+        (E::INT(w), E::INT(a)) => Ok(NN::nd(E::INT(cmp::max(*a, *w)))),
+        (E::BOOL(w), E::BOOL(a)) => Ok(NN::nd(E::BOOL(*w || *a))),
+        _ => do_conversion(lhs, rhs, do_max),
+    }
+}
+
+pub fn do_min(lhs: &NN, rhs: &NN) -> VmRes {
+    match (&lhs.n, &rhs.n) {
+        (E::INT(w), E::INT(a)) => Ok(NN::nd(E::INT(cmp::min(*a, *w)))),
+        _ => do_conversion(lhs, rhs, do_min),
+    }
+}
+
+pub fn do_amp(lhs: &NN, rhs: &NN) -> VmRes {
     match (lhs.clone().n, rhs.clone().n) {
-        (E::INT(w), E::INT(a)) => NN::nd(E::INT(w + a)),
-        (E::BOOL(w), E::BOOL(a)) => NN::nd(E::INT(bool_to_int(w) + bool_to_int(a))),
-        _ => match do_conversion(lhs, rhs, do_plus) {
-            Some(n) => n,
-            None => panic!("Unknown type"),
-        },
+        (E::LIST(l), E::LIST(a)) => {
+            if l.len() != a.len() {
+                return Err(VMError::new(format!(
+                    "& (filter) list length mismatch: {} vs {}",
+                    l.len(),
+                    a.len()
+                )));
+            }
+            Ok(NN::nd(E::LIST(l.into_iter().enumerate().fold(
+                Vec::new(),
+                |mut r: Vec<NN>, (i, w)| match w.n {
+                    E::BOOL(true) => {
+                        r.push(a[i].clone());
+                        r
+                    }
+                    _ => r,
+                },
+            ))))
+        }
+        _ => Err(VMError::new(format!(
+            "& (filter) expects two lists, got {} and {}",
+            type_name(lhs),
+            type_name(rhs)
+        ))),
     }
 }
 
-pub fn do_minus(lhs: &NN, rhs: &NN) -> NN {
-    match lhs.n {
-        E::INT(w) => match rhs.n {
-            E::INT(a) => NN::nd(E::INT(w - a)),
-            _ => panic!("Unknown instruction"),
-        },
-        _ => match do_conversion(lhs, rhs, do_minus) {
-            Some(n) => n,
-            None => panic!("Unknown type"),
-        },
+pub fn do_plus(lhs: &NN, rhs: &NN) -> VmRes {
+    match (&lhs.n, &rhs.n) {
+        (E::INT(w), E::INT(a)) => Ok(NN::nd(E::INT(w + a))),
+        (E::BOOL(w), E::BOOL(a)) => Ok(NN::nd(E::INT(bool_to_int(*w) + bool_to_int(*a)))),
+        _ => do_conversion(lhs, rhs, do_plus),
+    }
+}
+
+pub fn do_minus(lhs: &NN, rhs: &NN) -> VmRes {
+    match (&lhs.n, &rhs.n) {
+        (E::INT(w), E::INT(a)) => Ok(NN::nd(E::INT(w - a))),
+        _ => do_conversion(lhs, rhs, do_minus),
     }
 }

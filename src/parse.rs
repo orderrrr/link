@@ -54,7 +54,6 @@ fn parse_train(pair: Pair, monadic: bool) -> VRes {
         | Rule::exp
         | Rule::fun_d
         | Rule::fun_m
-        | Rule::fun_l
         | Rule::asexp
         | Rule::train
         | Rule::dtrain
@@ -147,7 +146,6 @@ fn parse_fn(pair: Pair, monadic: bool) -> Res {
         | Rule::ascii
         | Rule::fun_d
         | Rule::fun_m
-        | Rule::fun_l
         | Rule::asexp
         | Rule::number
         | Rule::fun
@@ -254,7 +252,6 @@ fn delve<'a>(value: &'a str, pair: Pair<'a>) -> BoRes<'a> {
             | Rule::ascii
             | Rule::fun_d
             | Rule::fun_m
-            | Rule::fun_l
             | Rule::number
             | Rule::texp
             | Rule::letter
@@ -318,7 +315,6 @@ fn build_ast_from_term(pair: Pair) -> Res {
         | Rule::fun_d
         | Rule::fnvalue
         | Rule::fun_m
-        | Rule::fun_l
         | Rule::nline
         | Rule::ascii
         | Rule::number
@@ -447,7 +443,6 @@ fn build_ast_from_expr(pair: Pair, _monadic: bool) -> Res {
         | Rule::block_exp
         | Rule::fun_d
         | Rule::fun_m
-        | Rule::fun_l
         | Rule::fn_list
         | Rule::dtrain
         | Rule::letter

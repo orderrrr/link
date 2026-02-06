@@ -16,6 +16,7 @@ fn main() {
         let readline = rl.readline(">> ");
         match readline {
             Ok(line) => {
+                let _ = rl.add_history_entry(&line);
                 let byte_code = I::fstring(&line);
 
                 match byte_code {
@@ -24,7 +25,13 @@ fn main() {
 
                         let mut vm = V::new(it);
                         vm.r();
-                        println!("{}", vm.pop_last());
+                        match &vm.error {
+                            Some(e) => println!("{}", e),
+                            None => match vm.pop_last() {
+                                Some(result) => println!("{}", result),
+                                None => println!("(no result)"),
+                            },
+                        }
                     }
                     Err(err) => println!("{}", err),
                 }

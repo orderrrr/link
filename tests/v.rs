@@ -10,7 +10,8 @@ fn pe(i: &str) -> NN {
     let byte_code = I::fstring(i);
     let mut vm = V::new(byte_code.unwrap());
     vm.r();
-    vm.pop_last().to_owned()
+    assert!(vm.error.is_none(), "VM error: {}", vm.error.unwrap());
+    vm.pop_last().unwrap().to_owned()
 }
 
 fn assert_pop_last(source: &str, node: NN) {
@@ -18,7 +19,8 @@ fn assert_pop_last(source: &str, node: NN) {
     debug_println!("byte code: {:?}", byte_code);
     let mut vm = V::new(byte_code.unwrap());
     vm.r();
-    assert_eq!(&node, vm.pop_last());
+    assert!(vm.error.is_none(), "VM error: {}", vm.error.unwrap());
+    assert_eq!(&node, vm.pop_last().unwrap());
 }
 
 #[test]

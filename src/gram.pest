@@ -12,12 +12,11 @@ texp      =_{dblock|block_exp|dtrain|fnvalue|fnblock|cfn|op_exp}
 dblock    = {block_exp~"|"~texp}
 block_exp = {"("~texp+~")"}
 cfn       = {(op_exp|value|block_exp|fnblock)~cn}
-fun       = {fun_om|fun_dm|fun_d|fun_m|fun_l}
+fun       = {fun_om|fun_dm|fun_d|fun_m}
 fun_om    =_{texp~terms}
 fun_dm    =_{terms~texp~terms}
 fun_d     =_{terms~"|"~texp~terms}
 fun_m     =_{texp~"|"~terms}
-fun_l     =_{terms?~texp~terms}
 
 op_exp    =_{mop|op}
 mop       = {op~":"}
@@ -28,12 +27,12 @@ op        = {
   |"="  // eq
   |"&"
   |"!"  // range 
-  |"ǁ"
 }
 
 cn        = {
    "/"  // fold
   |"\\" // scanl
+  |"ǁ"  // each
 }
 
 terms     = {term+}
