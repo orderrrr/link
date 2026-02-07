@@ -127,6 +127,88 @@ fn replace_aliases(input: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Collapse spaces inside trains
+// ---------------------------------------------------------------------------
+
+/// After alias replacement, remove whitespace between train elements.
+/// A train is the token sequence immediately after `(` up to (and including) `|`.
+/// We scan left-to-right; when we see `(`, we enter "maybe-train" mode and
+/// buffer characters. If we hit `|` while in that mode the buffered segment is
+/// a train and we emit it with spaces stripped. If we hit something that proves
+/// this isn't a train (e.g. a special form keyword like `λ`, `↻`, `:`) we
+/// flush the buffer as-is.
+fn collapse_train_spaces(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let len = chars.len();
+    let mut out = String::with_capacity(len);
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '(' && i + 1 < len {
+            out.push('(');
+            i += 1;
+
+            // Buffer everything up to `|` or proof this is not a train
+            let mut j = i;
+            let mut is_train = true;
+
+            // Skip leading whitespace after `(`
+            while j < len && chars[j].is_whitespace() {
+                j += 1;
+            }
+
+            // Check for special form heads that are NOT trains
+            if j < len && matches!(chars[j], 'λ' | '↻' | ':') {
+                is_train = false;
+            }
+
+            if is_train {
+                // Scan forward looking for `|`; stay within this paren level
+                let mut found_pipe = false;
+                let mut end = j;
+
+                while end < len {
+                    match chars[end] {
+                        '(' => {
+                            // nested paren means args have started — no train terminator here
+                            break;
+                        }
+                        ')' => break,
+                        '|' => {
+                            found_pipe = true;
+                            break;
+                        }
+                        '"' => break, // string means not a simple train
+                        _ => end += 1,
+                    }
+                }
+
+                if found_pipe {
+                    // Emit the segment [i..end] with spaces stripped, then the `|`
+                    for k in i..end {
+                        if !chars[k].is_whitespace() {
+                            out.push(chars[k]);
+                        }
+                    }
+                    out.push('|');
+                    i = end + 1; // skip past `|`
+                    continue;
+                }
+            }
+
+            // Not a train — emit chars as-is from start
+            // (i is already past the `(`)
+            continue;
+        }
+
+        out.push(chars[i]);
+        i += 1;
+    }
+
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Syntax highlighter
 // ---------------------------------------------------------------------------
 
@@ -350,6 +432,7 @@ fn main() {
         match readline {
             Ok(line) => {
                 let line = replace_aliases(&line);
+                let line = collapse_train_spaces(&line);
                 let _ = rl.add_history_entry(&line);
                 let byte_code = I::fstring_with_env(&line, env.clone());
 
