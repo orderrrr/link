@@ -186,7 +186,7 @@ fn is_monadic(destruct: &(Option<Pair>, Option<Pair>, Option<Pair>)) -> bool {
 
 fn unwrap_dexpr<'a>(
     destruct: (Option<Pair<'a>>, Option<Pair<'a>>, Option<Pair<'a>>),
-) -> (PRes, PRes, PRes) {
+) -> (PRes<'a>, PRes<'a>, PRes<'a>) {
     (
         destruct.0.ok_or(LocatedError::from(Er)),
         destruct.1.ok_or(LocatedError::from(Er)),
@@ -196,7 +196,7 @@ fn unwrap_dexpr<'a>(
 
 fn unwrap_mexpr<'a>(
     destruct: (Option<Pair<'a>>, Option<Pair<'a>>, Option<Pair<'a>>),
-) -> (PRes, PRes) {
+) -> (PRes<'a>, PRes<'a>) {
     (
         destruct.0.ok_or(LocatedError::from(Er)),
         destruct.1.ok_or(LocatedError::from(Er)),

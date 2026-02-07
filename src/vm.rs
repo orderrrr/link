@@ -444,6 +444,7 @@ impl V {
             FN::Plus => (mo_noimpl, do_plus),
             FN::Minus => (mo_minus, do_minus),
             FN::Mult => (mo_noimpl, do_noimpl),
+            FN::Rho => (mo_rho, do_rho),
         }
     }
 
@@ -703,4 +704,122 @@ pub fn do_minus(lhs: &NN, rhs: &NN) -> VmRes {
         (E::INT(w), E::INT(a)) => Ok(NN::nd(E::INT(w - a))),
         _ => do_conversion(lhs, rhs, do_minus),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shape / Reshape (ρ)
+// ---------------------------------------------------------------------------
+
+/// Extract a shape (Vec<usize>) from an NN that is either a single int or a list of ints.
+fn nn_to_shape(nn: &NN) -> Result<Vec<usize>, VMError> {
+    match &nn.n {
+        E::INT(i) => {
+            if *i < 0 {
+                return Err(VMError::new(format!(
+                    "ρ: shape dimension must be non-negative, got {}",
+                    i
+                )));
+            }
+            Ok(vec![*i as usize])
+        }
+        E::LIST(l) => {
+            let mut shape = Vec::with_capacity(l.len());
+            for el in l {
+                match &el.n {
+                    E::INT(i) => {
+                        if *i < 0 {
+                            return Err(VMError::new(format!(
+                                "ρ: shape dimension must be non-negative, got {}",
+                                i
+                            )));
+                        }
+                        shape.push(*i as usize);
+                    }
+                    _ => {
+                        return Err(VMError::new(format!(
+                            "ρ: shape must be ints, got {}",
+                            type_name(el)
+                        )))
+                    }
+                }
+            }
+            Ok(shape)
+        }
+        _ => Err(VMError::new(format!(
+            "ρ: expected int or list of ints for shape, got {}",
+            type_name(nn)
+        ))),
+    }
+}
+
+/// Build a nested LIST structure from flat data and a shape.
+/// e.g. shape [2,3], data [0,1,2,3,4,5] → LIST([LIST([0,1,2]), LIST([3,4,5])])
+fn build_nested(shape: &[usize], data: &[NN]) -> NN {
+    if shape.len() <= 1 {
+        // rank 0 or 1: just a flat list
+        return NN::nd(E::LIST(data.to_vec()));
+    }
+
+    let rows = shape[0];
+    let inner_shape = &shape[1..];
+    let row_len: usize = inner_shape.iter().product();
+
+    let mut result = Vec::with_capacity(rows);
+    for r in 0..rows {
+        let start = r * row_len;
+        let end = (start + row_len).min(data.len());
+        let row_data = if start < data.len() {
+            &data[start..end]
+        } else {
+            &[]
+        };
+        result.push(build_nested(inner_shape, row_data));
+    }
+    NN::nd(E::LIST(result))
+}
+
+/// Monadic ρ: take a shape description, produce a zeroed array of that shape.
+/// Shape args are x y (cols rows), displayed as rows × cols.
+/// ρ 5     → 0 0 0 0 0
+/// ρ 3 2   → 3 wide, 2 tall:
+///             0 0 0
+///             0 0 0
+pub fn mo_rho(rhs: &NN) -> VmRes {
+    let mut shape = nn_to_shape(rhs)?;
+    // Reverse: user gives [cols, rows, ...] but we store [rows, cols, ...]
+    shape.reverse();
+    let total: usize = shape.iter().product();
+    let data: Vec<NN> = vec![NN::nd(E::INT(0)); total];
+    Ok(build_nested(&shape, &data))
+}
+
+/// Dyadic ρ: reshape. Left is shape (x y = cols rows), right is data.
+/// 3 2 |ρ| !6  → 3 wide, 2 tall:
+///                 0 1 2
+///                 3 4 5
+/// 3 3 |ρ| !4  → cycles
+/// 2 2 |ρ| 7   → scalar fill
+pub fn do_rho(lhs: &NN, rhs: &NN) -> VmRes {
+    let mut shape = nn_to_shape(lhs)?;
+    // Reverse: user gives [cols, rows, ...] but we store [rows, cols, ...]
+    shape.reverse();
+    let total: usize = shape.iter().product();
+
+    // Get flat data from rhs
+    let source: Vec<NN> = match &rhs.n {
+        E::LIST(l) => l.clone(),
+        // Scalar: treat as a 1-element list that cycles
+        _ => vec![rhs.clone()],
+    };
+
+    if source.is_empty() {
+        return Err(VMError::new("ρ: cannot reshape empty data"));
+    }
+
+    // Build data by cycling source to fill total elements
+    let data: Vec<NN> = (0..total)
+        .map(|i| source[i % source.len()].clone())
+        .collect();
+
+    Ok(build_nested(&shape, &data))
 }

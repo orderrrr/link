@@ -16,6 +16,7 @@ pub enum FN /*monadic operator*/ {
     Eq,
     Amp,
     Bang,
+    Rho,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
@@ -37,6 +38,7 @@ impl FN {
             FN::Eq => "=",
             FN::Amp => "&",
             FN::Bang => "!",
+            FN::Rho => "ρ",
         }
     }
 
@@ -51,6 +53,7 @@ impl FN {
             "=" => FN::Eq,
             "&" => FN::Amp,
             "!" => FN::Bang,
+            "ρ" => FN::Rho,
             _ => unreachable!("Unknown FN: {}", s),
         }
     }
@@ -270,34 +273,63 @@ impl fmt::Display for E {
                         .fold(String::new(), |r, t| gen_sep("", &r, t))
                 })
             }
-            E::LIST(t) => write!(
-                f,
-                "{}{}{}",
-                gen_bool("[", is_nested(t)),
-                {
-                    t.into_iter().fold(String::new(), |r, t| match t.n.clone() {
-                        E::LIST(_) => gen_sep(";", &r, t),
-                        _ => gen_sep(" ", &r, t),
-                    })
-                },
-                gen_bool("]", is_nested(t)),
-            ),
+            E::LIST(t) => fmt_list(f, t),
         }
     }
 }
 
-pub fn is_nested(t: &Vec<NN>) -> bool {
-    match t.first().unwrap_or(&NN::nd(E::INT(0))).to_owned().n {
-        E::LIST(_) => true,
-        _ => false,
+fn fmt_list(f: &mut Fmt<'_>, t: &Vec<NN>) -> Res {
+    if t.is_empty() {
+        return write!(f, "()");
     }
-}
 
-pub fn gen_bool(inp: &str, b: bool) -> &str {
-    match b {
-        true => inp,
-        false => "",
+    // Check if this is a 2D structure (all elements are lists)
+    let all_lists = t.iter().all(|el| matches!(&el.n, E::LIST(_)));
+
+    if !all_lists {
+        // Rank 1: space-separated on one line
+        for (i, el) in t.iter().enumerate() {
+            if i > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{}", el)?;
+        }
+        return Ok(());
     }
+
+    // Rank 2+: grid format with right-aligned columns
+    // First, collect all rows as vectors of formatted strings
+    let rows: Vec<Vec<String>> = t
+        .iter()
+        .map(|row| match &row.n {
+            E::LIST(inner) => inner.iter().map(|el| format!("{}", el)).collect(),
+            _ => vec![format!("{}", row)],
+        })
+        .collect();
+
+    // Compute max width for each column index
+    let max_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let mut col_widths = vec![0usize; max_cols];
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            col_widths[i] = col_widths[i].max(cell.len());
+        }
+    }
+
+    // Print each row on its own line, right-aligned per column
+    for (row_idx, row) in rows.iter().enumerate() {
+        if row_idx > 0 {
+            writeln!(f)?;
+        }
+        for (col_idx, cell) in row.iter().enumerate() {
+            if col_idx > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{:>width$}", cell, width = col_widths[col_idx])?;
+        }
+    }
+
+    Ok(())
 }
 
 pub fn gen_sep(sep: &str, r: &str, n: &NN) -> String {

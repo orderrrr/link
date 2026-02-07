@@ -24,6 +24,7 @@ const FNMIN: u8 = 4;
 const FNEQ: u8 = 5;
 const FNAMP: u8 = 6;
 const FNBANG: u8 = 7;
+const FNRHO: u8 = 10;
 
 const COFOLD: u8 = 1;
 const COSCANL: u8 = 2;
@@ -102,6 +103,7 @@ pub fn get_fnop(fun: FN) -> u8 {
         FN::Eq => FNEQ,
         FN::Amp => FNAMP,
         FN::Bang => FNBANG,
+        FN::Rho => FNRHO,
     }
 }
 
@@ -161,6 +163,7 @@ pub fn byte_to_fn(by: u8) -> FN {
         FNEQ => FN::Eq,
         FNAMP => FN::Amp,
         FNBANG => FN::Bang,
+        FNRHO => FN::Rho,
         _ => unreachable!("unknown fn code"),
     }
 }
