@@ -20,14 +20,14 @@ pub enum FN /*monadic operator*/ {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
-pub enum CN /*compinators*/ {
+pub enum CN /*combinators*/ {
     Fold,
     ScanL,
     Each,
 }
 
 impl FN {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             FN::Plus => "+",
             FN::Minus => "-",
@@ -66,7 +66,7 @@ impl fmt::Display for FN {
 }
 
 impl CN {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             CN::Fold => "/",
             CN::ScanL => "\\",
@@ -143,19 +143,27 @@ impl fmt::Display for NN {
     }
 }
 
+// ---------------------------------------------------------------------------
+// AST expression enum — S-expression based
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum E {
+    // Literals
     INT(i32),
     BOOL(bool),
     FT(f64),
     ST(String),
-    VAL(String),  // separate from S for formatting
-    FVAL(String), // separate from value ( function value )
 
-    MFN(FN),
-    DFN(FN),
-    CN(CN),
+    // Names
+    VAL(String), // variable reference
 
+    // Operators and combinators (as AST nodes in trains)
+    MFN(FN), // monadic function
+    DFN(FN), // dyadic function
+    CN(CN),  // combinator
+
+    // Operator + combinator pair (e.g. +/)
     MCO {
         o: Box<NN>,
         co: Box<NN>,
@@ -165,60 +173,42 @@ pub enum E {
         co: Box<NN>,
     },
 
-    BL(Box<NN>),
-    FBLOCK(Vec<NN>),
-    MFBLOCK(Vec<NN>),
-    TFBLOCK(Vec<NN>),
-    TMFBLOCK(Vec<NN>),
+    // Monadic-override marker (op followed by :)
+    MOP(FN),
+
+    // List / array
     LIST(Vec<NN>),
 
-    MTRAIN(Vec<NN>),
-    DTRAIN(Vec<NN>),
-
-    MEXP {
-        op: Vec<NN>,
-        rhs: Box<NN>,
-    },
-    DEXP {
-        op: Vec<NN>,
-        lhs: Box<NN>,
-        rhs: Box<NN>,
+    // Application: train applied to arguments
+    // 1 arg = monadic, 2 args = dyadic
+    APPLY {
+        train: Vec<NN>, // the operator/combinator chain
+        args: Vec<NN>,  // the arguments
     },
 
-    DDTRAIN {
-        op: Vec<NN>,
-        lhs: Box<NN>,
+    // Lambda: (λ (params...) body...)
+    LAMBDA {
+        params: Vec<String>,
+        body: Vec<NN>,
     },
 
-    DBLOCK {
-        op: Vec<NN>,
-        lhs: Box<NN>,
-    },
+    // Do-block: (↻ expr1 expr2 ... exprN) — evaluate all, return last
+    DOBLOCK(Vec<NN>),
 
+    // Assignment: (: name expr)
     ASEXP {
-        op: Box<NN>,
+        name: String,
         rhs: Box<NN>,
     },
-}
 
-impl E {
-    fn write_train(op: &Vec<NN>) -> String {
-        if op.len() > 1 {
-            format!(
-                "{}|",
-                op.into_iter().fold(String::new(), |r, o| {
-                    if r.eq("") {
-                        format!("|{}", o.n)
-                    } else {
-                        format!("{}{}", r, o.n)
-                    }
-                })
-            )
-        } else {
-            // safe to unwrap
-            format!("{}", op.first().unwrap())
-        }
-    }
+    // User function value (runtime representation of a compiled lambda)
+    // Self-contained: carries its own bytecode and constants so it works
+    // across REPL compilation units.
+    UFNV {
+        nparams: usize,    // number of parameters
+        body_op: Vec<u8>,  // bytecode for the function body (STORE params + body + END)
+        body_var: Vec<NN>, // constant pool entries the body references
+    },
 }
 
 impl fmt::Display for E {
@@ -226,54 +216,48 @@ impl fmt::Display for E {
         match &self {
             E::INT(n) => write!(f, "{}", n),
             E::FT(n) => write!(f, "{}", n),
-            E::BOOL(b) => write!(f, "{}", {
-                match b {
-                    true => 1,
-                    false => 0,
-                }
-            }),
+            E::BOOL(b) => write!(f, "{}", if *b { 1 } else { 0 }),
             E::ST(s) => write!(f, "\"{}\"", s),
-            E::VAL(s) | E::FVAL(s) => write!(f, "{}", s),
-            E::BL(b) => write!(f, "({})", b),
-            E::MFN(mo) => write!(f, "{}", mo),
+            E::VAL(s) => write!(f, "{}", s),
+            E::MFN(o) => write!(f, "{}", o),
             E::DFN(d) => write!(f, "{}", d),
             E::CN(co) => write!(f, "{}", co),
-            E::DCO { o, co } => write!(f, "{}{}", o, co),
-            E::MCO { o, co } => write!(f, "{}{}", o, co),
-            E::DTRAIN(tb) | E::MTRAIN(tb) => write!(f, "({})", {
-                tb.into_iter()
-                    .fold(String::new(), |r, t| gen_sep("", &r, t))
-            }),
-            E::MEXP { op, rhs } => write!(f, "{}{}", E::write_train(op), rhs),
-            E::DEXP { op, lhs, rhs } => write!(f, "{}{}{}", lhs, E::write_train(op), rhs),
-            E::DDTRAIN { op, lhs } => write!(f, "{}|{}", lhs, {
-                op.into_iter()
-                    .fold(String::new(), |r, t| gen_sep("", &r, t))
-            }),
-            E::DBLOCK { op, lhs } => write!(f, "{}|{}", lhs, {
-                op.into_iter()
-                    .fold(String::new(), |r, t| gen_sep("", &r, t))
-            }),
-            E::ASEXP { op, rhs } => write!(f, "{}:{}", op, rhs),
-            E::FBLOCK(fb) | E::MFBLOCK(fb) => {
-                write!(f, "{{{}}}", {
-                    fb.into_iter()
-                        .fold(String::new(), |r, t| gen_sep(";", &r, t))
-                })
-            }
-            E::TMFBLOCK(fb) => {
-                write!(f, "{{{}|}}", {
-                    fb.into_iter()
-                        .fold(String::new(), |r, t| gen_sep("", &r, t))
-                })
-            }
-            E::TFBLOCK(fb) => {
-                write!(f, "{{|{}|}}", {
-                    fb.into_iter()
-                        .fold(String::new(), |r, t| gen_sep("", &r, t))
-                })
-            }
+            E::DCO { o, co } | E::MCO { o, co } => write!(f, "{}{}", o, co),
+            E::MOP(o) => write!(f, "{}:", o),
             E::LIST(t) => fmt_list(f, t),
+            E::APPLY { train, args } => {
+                write!(f, "(")?;
+                for t in train {
+                    write!(f, "{}", t)?;
+                }
+                for a in args {
+                    write!(f, " {}", a)?;
+                }
+                write!(f, ")")
+            }
+            E::LAMBDA { params, body } => {
+                write!(f, "(λ (")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "{}", p)?;
+                }
+                write!(f, ")")?;
+                for b in body {
+                    write!(f, " {}", b)?;
+                }
+                write!(f, ")")
+            }
+            E::DOBLOCK(exprs) => {
+                write!(f, "(↻")?;
+                for e in exprs {
+                    write!(f, " {}", e)?;
+                }
+                write!(f, ")")
+            }
+            E::ASEXP { name, rhs } => write!(f, "(: {} {})", name, rhs),
+            E::UFNV { nparams, .. } => write!(f, "<fn:{}>", nparams),
         }
     }
 }
@@ -298,7 +282,6 @@ fn fmt_list(f: &mut Fmt<'_>, t: &Vec<NN>) -> Res {
     }
 
     // Rank 2+: grid format with right-aligned columns
-    // First, collect all rows as vectors of formatted strings
     let rows: Vec<Vec<String>> = t
         .iter()
         .map(|row| match &row.n {
@@ -307,7 +290,6 @@ fn fmt_list(f: &mut Fmt<'_>, t: &Vec<NN>) -> Res {
         })
         .collect();
 
-    // Compute max width for each column index
     let max_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
     let mut col_widths = vec![0usize; max_cols];
     for row in &rows {
@@ -316,7 +298,6 @@ fn fmt_list(f: &mut Fmt<'_>, t: &Vec<NN>) -> Res {
         }
     }
 
-    // Print each row on its own line, right-aligned per column
     for (row_idx, row) in rows.iter().enumerate() {
         if row_idx > 0 {
             writeln!(f)?;

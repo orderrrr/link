@@ -1,279 +1,413 @@
-# Link ( *l is not k* )
-Link is a programming language designed with heavy inspiration from [K]("https://k-project.fandom.com/wiki/Home") (mainly k6) and [BQN]("https://mlochbaum.github.io/BQN/").
+# Link Manual ( *l is not k* )
 
-### General structure of a link program:
+Link is a programming language designed with heavy inspiration from [K](https://k-project.fandom.com/wiki/Home) (mainly k6) and [BQN](https://mlochbaum.github.io/BQN/). It uses S-expression (Lisp-style) syntax while retaining array-oriented semantics, trains, and right-to-left evaluation.
 
-A link program is built of the following concepts:
-- A program - a list of expressions
-- An expression - one of three things:
-  1. A monadic expression (a monadic[^1] train and a single unit)
-  2. A dyadic expression (a dyadic[^2] train and two units)
-  3. A unit
-- A unit - this is data (functions, lists, strings, numbers, characters, etc.)
-- A train - this will be discussed later. Trains are multiple(or single) functions that chain together to create a result.
-- A Function - functions come in many different forms. A function can either be user defined or be one of the primitive functions created in link (unlike k a user function in link can be used the same way a primitive function can).
-- A list - the main data type all array oriented languages are designed to thrive on. Lists are not limited to one data type<br>
-  (which comes with some benefits and some drawbacks). `[1;"hello link";|+/|]`
-- A string - under the hood a string is the same datatype as a list.
-- TODO - do more
+## General Structure of a Link Program
 
-Here is a simple example of a link program 
-```
-+/!|1000
-```
+A Link program is a single S-expression. The building blocks are:
 
-###### What does this do?
-Well this program:
-takes all numbers from 0 -> 1000 and sums up the total.
+- **S-expression** -- `(head elements...)` -- the universal syntax form
+- **Atom** -- a bare value: integer, float, string, or name
+- **Application** -- `(train args...)` -- apply operators to arguments. 1 arg = monadic, 2 args = dyadic.
+- **Train** -- one or more operators/combinators chained together, evaluated right to left
+- **Lambda** -- `(λ (params...) body...)` -- user-defined function
+- **Do-block** -- `(↻ expr1 expr2 ... exprN)` -- sequence of expressions, returns last
+- **Assignment** -- `(: name expr)` -- bind a value to a name
+- **List literal** -- `(v1 v2 v3)` -- first element is a value, not an operator
 
-###### How does it work?
-To understand how it works we first need to understand the order of execution:<br>
-First a program is formed, (list of expressions) in this case just one expression [`+/!|1000`]
-Then expressions are formed, this is a monadic train so it needs a train and a unit:<br>
-The unit in this case is a number: `1000`<br>
-The train in this case is: [`|+, /, !|`]<br>
-There is one charactar that is present in the program but not present here. That being the pipe `|`<br>
-The pipe symbol in link is used to manupulate how link reads your program. For now just know that this is how we tell link it is a monadic train (we will go into this in greater detail later).
+### Disambiguation
 
-Now we have a program so let's execute it.
-Programs are read from left to right like any language, however trains are read from right to left.<br>
-So our program would do the following:
-1. `!1000` - similar to range in pythons `range(1000)`
-2. `+/` - `/` receives the range we generated and essentially does a [reduce/fold]("https://en.wikipedia.org/wiki/Fold_(higher-order_function)"))<br>
-  the `+` is the function the fold will do on the input. so in this case we add all the numbers from 0-1000 together
+The first element of any `(...)` determines what it is:
 
-That's it! pretty simple function represented in a very readable way once you get an understanding of the symbols meaning.
+First element                     | Type
+---                               | ---
+Operator (`+`, `-`, `ρ`, etc.)    | Application
+Combinator-attached op (`+/`)     | Application
+Name (`foo`, `square`)            | Function call
+`λ`                               | Lambda definition
+`↻`                               | Do-block
+`:`                               | Assignment
+Number, float, string, nested `(` | List literal
 
-## Program Symbols ( everything )
-
-##### Functions
-
-Symbol | Monadic              | Dyadic
----    |---                   |---
-`+`    | Incriment (TODO)     | Add      (TODO)
-`-`    | Negate (TODO)        | Subtract (TODO)
-`×`    | Not currently in use | Multiply (TODO)
-`÷`    | Not currently in use | Divide   (TODO)
-`¯`    | Not currently in use | Max      (TODO)
-`_`    | Not currently in use | Min      (TODO)
-`=`    | Boolean flip (TODO)  | Equal    (TODO)
-`&`    | Not currently in use | Indices  (TODO)
-`!`    | Range (TODO)         | Modulo   (TODO)
-
-##### HO Functions
-
-Symbol | Monadic              | Dyadic
----    |---                   |---
-`/`    | Not currently in use | Fold     (TODO)
-`\`    | Not currently in use | ScanL    (TODO)
-`ǁ`    | Each(TODO)           | Each     (TODO)
-
-#### Modules
-
-Symbol | Module
----    |---
-`°`    | Higher order
-
-##### Reserved Variables
-Symbol | Use
----    |---
-`ɑ`    | RIght side of dyadic/monadic train
-`ω`    | Left side of dyadic train
-
-##### User variables:
-Any unicode character not reserved by the system
-
-###### ASCII KEYS - `` !"#$%&'()*+,-./:;<=>?@\^_`|~ ``
-###### NEEDS A USE - `` #$'*,:<>?@\`~.% ``
-
-###### UNICODE KEYS (not currently in use) - `` µ¦¬¯°×÷øǁǂɑʘΦωʃΞ௦ ``
-
-##### Lists
-
-Symbol/s | Module
----      |---
-`{}`     | Function block
-`[]`     | List block
-`()`     | Expression/train block
-`""`     | String block
-
-##### Other ( important )
-One symbol that is used a lot in link and<br>
-is a relatively unique concept is the pipe (`|`) symbol<br>
-The pipe symbol does a number of things in different contexts.
-
-Namely:
-- Within the context of a monadic expression (eg: `+/!|100`)<br>
-is an identifier for a monadic train
-- Within the context of a dyadic expression (eg: `3 5|=!|5`)<br>
-is an identifier for a dyadic train (used on both sides of the train)<br>
-
-###### Why is this needed?
-
-A number of reasons. Main one being that user functions and reserved functions in some array languages are very distinct from eachother. Creating a bit of a problem if you would like to use them interchangeably.<br>
-Take these as examples:<br>
-1. `f: 3 5; f|=!|5` - without the pipe: `f: 3 5; f=!5`<br>
-2. `f: {=}; f!|1 0 1 0` - without the pipe: `f: {=}; f!1 0 1 0`<br><br>
-Should f be used as a function of a monadic train or as the right argument of a dyadic train in no. 1<br>
-Same goes for no. 2
-
-- Within the context of a train (eg: `+/(^/=3 5|%!.\)|&!|10`). Ignore the program itself. Just have a look of the use of the pipe here. We can convert a segment of a monadic train to a dyadic one. and drop the right argument and continue the monadic train.
-
-
-# VM
- OPCODE  | CODE | ARGS            | ROLE
----      |---   |---              |---
- `CONST` | `01` | Index(`u16`)    | Reads a variable
- `POP`   | `02` |                 | Pop the stack
- `JMP`   | `03` | BPointer(`u16`) | Jump 
- `GETL`  | `04` |                 | Get left variable from function
- `GETR`  | `05` |                 | Get right variable from function
- `CRVAR` | `06` |                 | Clear left variable from function
- `CLVAR` | `07` |                 | Clear right variable from function
- `DUP`   | `08` |                 | Duplicate top of stack
- `MBL`   | `09` | BPointer(`u16`) | Definition of monadic block
- `DBL`   | `10` | BPointer(`u16`) | Definition of dyadic block
- `END`   | `11` | BPointer(`u16`) | End of block
- `MO`    | `12` | Index(`u8`)     | Monadic function (system)
- `DO`    | `13` | Index(`u8`)     | Dyadic function (system)
- `CO`    | `14` | Index(`u8`)     | Combinator function (system)
-
-# VM REVISED
-There are two data arrays in a link vm.
-1. A variable array where we push constants to.
-2. An opcode array where we read and execute instructions from.
-
-The vm has the following opcodes:
-
-All instructions are stored in a 4 element array<br>
-Each instruction has the following information:
-
-NAME |TYPE |DESC
----  |---  |---
-CODE |`u8` |the instruction code
-DATA |`u8` |data row 1
-DATA |`u8` |data row 2
-OUTP |`u8` |output location
-
-Currently supported opcodes are:
-CODE   |DATA     |DATA     |OUTP     |DESC
----    |---      |---      |---      |---
-`CNST` |_VAR IDX |_VAR IDX |USED     |Put constant[IDX] from variable store and put it into out
-`IJMP` |BYTE IDX |BYTE IDX |NOT USED |Jump instruction pointer to specific location
-`M_BL` |BYTE IDX |BYTE IDX |USED     |Start of monadic block
-`D_BL` |BYTE IDX |BYTE IDX |USED     |Start of dyadic block
-`M_FN` |M_OP IDX |C_OP IDX |USED     |Monadic function (system)
-`D_FO` |D_OP IDX |C_OP IDX |USED     |Dyadic function (system)
-
-OPCODE |CODE |ARGS            |ROLE
----    |---  |---             |---
-`CONST`|`01` |Index(`u16`)    |Reads a variable
-
-Example program bytecode:<br>
-program `+/(^/=3 5|%!.\)|&!|1000`
-
-CODE |DATA  |COMB  |OUTP
----  |---   |---   |---
-_POP |_NIL  |_NIL  |_NIL
-M_BL |0012  |_NIL  |OUTA
-CNST |0000  |_NIL  |OUTA
-M_OP |0001  |_NIL  |OUTA
-D_BL |0008  |_NIL  |OUTA
-M_BL |0005  |_NIL  |OUTW
-D_BL |0002  |_NIL  |OUTA
-CNST |0001  |_NIL  |OUTW
-D_OP |0001  |0001  |OUTA
-M_OP |0002  |_NIL  |OUTA
-M_OP |0002  |_NIL  |OUTA
-D_OP |0002  |_NIL  |OUTA
-M_OP |0002  |0001  |OUTA
+### Example
 
 ```
-POP → pop value a from ↓
-  MBL   → start m train ( results in output fed to a of print )
-    CONST → grab v[0] ( puts const into a )
-    MO !  → run ! on α
-    DBL   → start d train
-      MBL → start m train
-        DBL   → start d train
-          CONST → grav v[1]
-          DO %  → run \% on ω, α
-        MO =  → run eq on α
-        MO ^  → run /^ on α
-      DO & → run & on ω, α
-    MO + → run +/ on α
+(+/! 1000)
 ```
 
-Alternative:<br>
-program:
+This program sums all numbers from 0 to 999:
+
+1. `!` (range) produces `0 1 2 3 ... 999`
+2. `+/` (fold with plus) sums the entire list
+
+Result: `499500`
+
+## Program Symbols
+
+### Operators (Functions)
+
+Symbol | Alias | Monadic (1 arg)              | Dyadic (2 args)
+---    | ---   | ---                          | ---
+`+`    | `add` | *not yet implemented*        | Add
+`-`    | `neg` | Negate                       | Subtract
+`×`    | `mul` | *not yet implemented*        | *not yet implemented*
+`÷`    | `div` | *not yet implemented*        | *not yet implemented*
+`¯`    | `max` | *not yet implemented*        | Maximum
+`_`    | `min` | Floor (float to int)         | Minimum
+`=`    | `eq`  | Boolean flip (0→1, n→0)      | *not yet implemented*
+`&`    | `amp` | *not yet implemented*        | Filter by boolean mask
+`!`    | `mod` | Range (0 to n-1)             | Modulo
+`ρ`    | `rho` | Create zeroed array by shape | Reshape data to shape
+
+### Combinators (Higher-Order Functions)
+
+Symbol | Alias   | Description
+---    | ---     | ---
+`/`    | `fold`  | Fold/reduce a list with a dyadic function
+`\`    | `scanl` | Each-left / outer product
+`ǁ`    | `each`  | Each (*not yet implemented*)
+
+### Special Forms
+
+Symbol | Alias  | Syntax                          | Description
+---    | ---    | ---                             | ---
+`λ`    | `lam`  | `(λ (params...) body...)`       | Define a function
+`↻`    | `loop` | `(↻ expr1 expr2 ... exprN)`     | Sequence expressions, return last
+`:`    | `mon`  | `(: name expr)`                 | Assign a value to a name
+`:`    |        | suffix on op (e.g. `!:`)        | Force monadic in dyadic train
+
+### REPL Aliases
+
+In the REPL, type the ASCII alias and it is replaced with the unicode symbol on Enter. Aliases can chain without spaces: `rhomodmon` → `ρ!:`.
+
+Alias   | Symbol | Name
+---     | ---    | ---
+`add`   | `+`    | Plus
+`neg`   | `-`    | Minus
+`mul`   | `×`    | Times
+`div`   | `÷`    | Divide
+`max`   | `¯`    | Max
+`min`   | `_`    | Min/Floor
+`eq`    | `=`    | Equal/Flip
+`amp`   | `&`    | Amp
+`mod`   | `!`    | Bang
+`rho`   | `ρ`    | Rho
+`mon`   | `:`    | Monadic Override / Assign
+`fold`  | `/`    | Fold
+`scanl` | `\`    | ScanL
+`each`  | `ǁ`    | Each
+`lam`   | `λ`    | Lambda
+`loop`  | `↻`    | Do-block
+
+## Syntax In Detail
+
+### Atoms
+
+Atoms are bare values that don't need parentheses:
+
 ```
-fn: {+/(^/=w|%!.\)|&!|}
-3 5 |fn| 1000
+42                      ; integer
+-3                      ; negative integer
+3.14                    ; float
+"hello world"           ; string (use "" to escape quotes)
+x                       ; variable name
 ```
 
+### Application
 
-# VM Environment
-Our VM is quite nice at this point, it has a decent way of storing state.
-However we need our environment to be able to store more. Let's talk about functions.
-I'm thinking of two ways we could store a function.
-- Firstly, we could store it in the bytecode, to have one large bytecode array
-- We could have a seperate state for the current runtime bytecode and any bytecode we would like to use later.
-The latter seems to be a lot better to me for re-use.
-Link is planned to be heavily built around a REPL type environment so it would be nice to have a succint way to store
-previously executed functions/variables
+Apply operators to arguments with parentheses. Arity is determined by argument count:
 
-CODE |DATA  |COMB  |OUTP
----  |---   |---   |---
-_POP |_NIL  |_NIL  |_NIL
-D_BL |TODO  |_NIL  |OUTA
-CNST |0000  |_NIL  |OUTA
-CNST |0001  |_NIL  |OUTB
-E_FN |0001  |_NIL  |OUTA
-
-and the function looks like this:
-
-CODE |DATA  |COMB  |OUTP
----  |---   |---   |---
-_POP |_NIL  |_NIL  |_NIL
-M_BL |0012  |_NIL  |OUTA
-M_OP |0001  |_NIL  |OUTA
-D_BL |0008  |_NIL  |OUTA
-M_BL |0005  |_NIL  |OUTW
-D_BL |0002  |_NIL  |OUTA
-SCPE |0001  |_NIL  |OUTA // scope variables
-D_OP |0001  |0001  |OUTA
-M_OP |0002  |_NIL  |OUTA
-M_OP |0002  |_NIL  |OUTA
-D_OP |0002  |_NIL  |OUTA
-M_OP |0002  |0001  |OUTA
-
-### On execution ByteCode
 ```
-POP → pop value a from ↓
-  DBL → start d train
-    CONST → grab v[0] into α
-    CONST → grab v[1] into ω
-    E_FN → evaluate function[0] with current stack into α
+; Monadic (1 arg)
+(- 5)                   ; negate: -5
+(! 4)                   ; range: 0 1 2 3
+
+; Dyadic (2 args)
+(+ 3 4)                 ; add: 7
+(- 10 3)                ; subtract: 7
+(ρ (3 2) (1 2 3 4 5 6)) ; reshape: 2 rows × 3 cols
 ```
-### On execution FunctionDictionary
+
+### Trains
+
+A train is a sequence of operators and combinators written adjacently in the head position. They are evaluated right to left:
+
 ```
-POP → pop value a from ↓
-  MBL   → start m train ( results in output fed to a of print )
-    MO !  → run ! on α
-    DBL   → start d train
-      MBL → start m train
-        DBL   → start d train
-          CONST → grab s[0][1]
-          DO %  → run \% on ω, α
-        MO =  → run eq on α
-        MO ^  → run /^ on α
-      DO & → run & on ω, α
-    MO + → run +/ on α
+(+/! 10)                ; train is "+/!" applied to 10
+                        ; ! produces 0..9, +/ sums → 45
 ```
+
+In a **dyadic** multi-element train:
+- **Rightmost** operators apply **monadically** to the right argument
+- The **leftmost** operator applies **dyadically**, combining the left argument with the chain result
+
+```
+(ρ!: (3 2) 6)           ; !: monadically on 6 → 0 1 2 3 4 5
+                         ; ρ dyadically: (3 2) reshape 0..5
+                         ;    0 1 2
+                         ;    3 4 5
+```
+
+### The `:` Monadic Override
+
+In a dyadic train, suffix `:` on an operator to force it monadic:
+
+```
+(ρ!: (3 2) 6)           ; ! forced monadic (range), ρ stays dyadic
+```
+
+Without `:`, `!` in `(ρ! (3 2) 6)` would be dyadic (modulo).
+
+### List Literals
+
+When the first element of `(...)` is a value (not an operator), it's a list:
+
+```
+(1 2 3)                 ; list: [1, 2, 3]
+(10 20 30)              ; list: [10, 20, 30]
+((1 2 3) (4 5 6))       ; 2D list: two rows of three
+```
+
+For multi-dimensional arrays from flat data, use `ρ`:
+
+```
+(ρ (3 2) (1 2 3 4 5 6)) ; reshape flat data into 2×3 matrix
+```
+
+### Assignment
+
+Bind values to names with `:`:
+
+```
+(: x 42)
+(: greeting "hello")
+(: nums (1 2 3 4 5))
+(: square (λ (x) (× x x)))
+```
+
+Assigned names can be used in operator position (function calls) or as values:
+
+```
+(: data (! 10))
+(+/ data)               ; sum the data
+```
+
+### Lambda Functions
+
+Define functions with `λ`. First arg is the parameter list, rest is the body:
+
+```
+(λ (x) (+ x 1))                    ; increment
+(λ (a b) (+ a b))                   ; add two values
+(λ (x) (: y (+ x 1)) (× y y))      ; multi-expression body, returns last
+```
+
+Bind lambdas to names:
+
+```
+(: square (λ (x) (× x x)))
+(square 5)                          ; => 25
+```
+
+Lambdas are callable in operator position and can be used in trains.
+
+### Do-blocks
+
+Use `↻` to sequence multiple expressions. Returns the last result:
+
+```
+(↻
+  (: x 5)
+  (: y 10)
+  (+ x y)
+)
+; => 15
+```
+
+The entire program should be wrapped in `(↻ ...)` when it has multiple top-level expressions.
+
+### Comments
+
+Lisp-style `;` comments — from `;` to end of line:
+
+```
+; this is a full-line comment
+(+ 1 2)                ; this is an inline comment
+```
+
+## Operators Reference
+
+### `-` Negate / Subtract
+
+```
+(- 2)                   ; => -2
+(- 5 3)                 ; => 2
+```
+
+### `!` Range / Modulo
+
+```
+(! 4)                   ; => 0 1 2 3
+(! 3 10)                ; => 1 (10 mod 3)
+```
+
+### `=` Boolean Flip
+
+```
+(= 0)                   ; => 1
+(= 5)                   ; => 0
+(= (0 1 0 1))           ; => 1 0 1 0
+```
+
+### `_` Floor / Min
+
+```
+(_ 3.7)                 ; => 3
+(_ 2 5)                 ; => 2
+```
+
+### `&` Filter
+
+Dyadic: boolean mask on left, data on right:
+
+```
+(& (1 0 1 0) (10 20 30 40))    ; => 10 30
+```
+
+### `ρ` Shape / Reshape
+
+Monadic — create zeroed array:
+
+```
+(ρ 5)                   ; => 0 0 0 0 0
+(ρ (3 2))               ; => 0 0 0
+                        ;    0 0 0
+```
+
+Dyadic — reshape data:
+
+```
+(ρ (3 2) (0 1 2 3 4 5)) ; => 0 1 2
+                         ;    3 4 5
+```
+
+With monadic override for range:
+
+```
+(ρ!: (3 2) 6)           ; => 0 1 2
+                         ;    3 4 5
+```
+
+### `+/` Fold
+
+Reduce a list:
+
+```
+(+/ (! 10))             ; => 45 (sum of 0..9)
+(+/ (1 2 3 4 5))        ; => 15
+```
+
+### `!\` ScanL
+
+Each-left / outer product:
+
+```
+(!\ (3 5) (! 10))       ; each of [3, 5] modulo'd against range(10)
+```
+
+## Array Display
+
+2D arrays are displayed as right-aligned grids:
+
+```
+>> (ρ (3 2) (1 2 3 10 20 30))
+ 1  2  3
+10 20 30
+```
+
+1D lists are space-separated:
+
+```
+>> (! 5)
+0 1 2 3 4
+```
+
+## Error Handling
+
+Type mismatches produce runtime errors instead of crashing:
+
+```
+>> (- "foo")
+runtime error: - (negate) expects int or float, got string
+
+>> (! "hello")
+runtime error: ! (range) expects int, got string
+```
+
+## VM Architecture
+
+Link compiles source through a three-stage pipeline:
+
+```
+Source → Parser (PEG) → AST → Bytecode Compiler → VM → Result
+```
+
+### VM Opcodes
+
+The VM is stack-based with 17 opcodes:
+
+Opcode  | Code | Operand        | Description
+---     | ---  | ---            | ---
+`CONST` | `01` | `u16` index    | Push constant from variable store
+`POP`   | `02` |                | Pop top of stack
+`JMP`   | `03` | `u16` address  | Jump instruction pointer
+`GETL`  | `04` |                | Get left variable (`w`)
+`GETR`  | `05` |                | Get right variable (`a`)
+`CRVAR` | `06` |                | Create variable
+`CLVAR` | `07` |                | Clear variable
+`DUP`   | `08` | `u16` address  | Duplicate top of stack
+`MBL`   | `09` | `u16` address  | Start monadic block
+`DBL`   | `0A` | `u16` address  | Start dyadic block
+`END`   | `0B` |                | End block
+`MO`    | `0C` | `u8` fn-id     | Monadic function
+`DO`    | `0D` | `u8` fn-id     | Dyadic function
+`CO`    | `0E` | `u8` cn-id     | Combinator
+`CALL`  | `0F` | `u16` nargs    | Call user-defined function
+`STORE` | `10` | `u16` name-idx | Store variable binding
+`LOAD`  | `11` | `u16` name-idx | Load variable by name
+
+### VM Data Structures
+
+The VM has two main data structures:
+
+1. **Value stack** (`Vec<NN>`) — computation stack where all operations happen
+2. **Context stack** (`[C; 512]`) — tracks block nesting (MBL/DBL/DUP/JMP) and return addresses
+
+The variable store (`var: Vec<NN>`) holds constants and bound values. The lookup table (`lookup: HashMap<String, u16>`) maps variable names to indices in the variable store.
+
+### Compilation Strategy
+
+The bytecode compiler translates the AST into a flat byte stream:
+
+- **Literals** → `CONST(idx)` — stored in the variable pool
+- **Monadic apply** → push arg, `MBL`, train ops (reversed), `END`
+- **Dyadic apply** → push both args, `DBL`, train ops (reversed, rightmost=MO, leftmost=DO), `END`
+- **Do-block** → compile each expression sequentially, `POP` intermediate results
+- **Assignment** → compile rhs, `STORE(name_idx)` — binds name to value
+- **Lambda** → `JMP` past body, body code, `END`, then `CONST` of body address
+
+### Block Lifecycle
+
+Blocks (MBL/DBL) use back-patching: the compiler emits `MBL(0)` with a placeholder address, compiles the body, then patches the address to point past the `END` instruction.
+
+In a DBL block, the VM duplicates both stack values so the dyadic operator has access to both arguments even after monadic operations in the train have consumed and replaced the top of stack.
+
+## Not Yet Implemented
+
+- **Lambda CALL** — lambdas compile but the `CALL` opcode is not yet wired up. User function calls through variable names in trains need a call stack mechanism.
+- **Anonymous lambda calls** — `((λ (x) (+ x 1)) 5)` — structurally supported but blocked on CALL.
+- **Each combinator** (`ǁ`) — parsed but not implemented in the VM.
+- **Multiplication** (`×`) and **division** (`÷`) — operators exist but both monadic and dyadic forms return errors.
 
 ---
-###### No prior experience in language design or interpreters
-Please keep in mind this is my first go of this. To add to that the implementation is a bit ropey at the moment and a lot of things don't work (or even fundamentally don't work).
-
-[^1]: NOT WRITTEN
-[^2]: NOT WRITTEN
+###### This is an experimental language. The implementation is evolving.

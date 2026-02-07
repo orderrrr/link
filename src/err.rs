@@ -1,4 +1,4 @@
-use crate::{Pair, Rule, B, NN};
+use crate::{Rule, B, NN};
 use std::fmt::{Display, Formatter};
 
 use std::fmt::Error as FmtError;
@@ -9,11 +9,7 @@ use pest::error::Error as PestError;
 use std::error::Error;
 use std::panic::Location;
 
-use pest::Span;
-
 pub type VRes = Result<Vec<NN>, LocatedError<LErrEnum>>;
-pub type PRes<'i> = Result<Pair<'i>, LocatedError<LErrEnum>>;
-pub type BoRes<'i> = Result<bool, LocatedError<LErrEnum>>;
 pub type Res = Result<NN, LocatedError<LErrEnum>>;
 pub type BRes = Result<B, LocatedError<LErrEnum>>;
 
@@ -39,33 +35,6 @@ impl Display for LErr {
     }
 }
 
-pub fn err(er: &str, sp: Span) -> LErr {
-    LErr {
-        error: er.to_owned(),
-        start: sp.start(),
-        end: sp.end(),
-    }
-}
-
-// #[derive(Debug, Clone)]
-// pub struct LocatedError {
-//     inner: LErrEnum,
-//     file: &'static str,
-//     line: u32,
-//     column: u32,
-// }
-
-// impl std::fmt::Display for LocatedError {
-//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-//         write!(
-//             f,
-//             "{}, {}:{}:{}",
-//             self.inner, self.file, self.line, self.column
-//         )
-//     }
-// }
-
-// New error type encapsulating the original error and location data.
 #[derive(Debug, Clone)]
 pub struct LocatedError<E: Error + 'static> {
     inner: E,
@@ -84,7 +53,6 @@ impl<E: Error + 'static> std::fmt::Display for LocatedError<E> {
     }
 }
 
-// The magic happens here
 impl From<std::io::Error> for LocatedError<std::io::Error> {
     #[track_caller]
     fn from(err: std::io::Error) -> Self {
@@ -96,8 +64,6 @@ impl From<std::io::Error> for LocatedError<std::io::Error> {
 }
 
 impl From<LErr> for LocatedError<LErrEnum> {
-    // The magic happens here
-    // todo dont do this
     #[track_caller]
     fn from(err: LErr) -> Self {
         LocatedError {
@@ -108,8 +74,6 @@ impl From<LErr> for LocatedError<LErrEnum> {
 }
 
 impl From<LErrEnum> for LocatedError<LErrEnum> {
-    // The magic happens here
-    // todo dont do this
     #[track_caller]
     fn from(err: LErrEnum) -> Self {
         LocatedError {
@@ -152,15 +116,9 @@ impl From<PestError<Rule>> for LocatedError<LErrEnum> {
 #[derive(Debug, Clone)]
 pub enum LErrEnum {
     Standard(LErr),
-    TrainExpected(LErr),
-    FnExpected(LErr),
-    TermExpected(LErr),
-    ValueExpected(LErr),
-    MonadicFunctionExpected,
     ExprExpected,
     IntExpected(ParseIntError),
     FloatExpected(ParseFloatError),
-
     PestError(PestError<Rule>),
     Rule(Rule),
     None,
@@ -199,17 +157,12 @@ impl From<ParseFloatError> for LErrEnum {
 impl Display for LErrEnum {
     fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
         match self {
-            Self::Standard(e) => write!(f, "Error during runtime {}.", e.error),
-            Self::TrainExpected(e) => write!(f, "Expected Train element here got {}", e.error),
-            Self::FnExpected(e) => write!(f, "Expected Function element here got {}", e.error),
-            Self::TermExpected(e) => write!(f, "Expected Term element here got {}", e.error),
-            Self::ValueExpected(e) => write!(f, "Expected Value here got {}", e.error),
-            Self::MonadicFunctionExpected => write!(f, "Expected Monadic function here"),
-            Self::ExprExpected => write!(f, "Expected Expression here"),
-            Self::IntExpected(e) => write!(f, "Expected Int here: {}", e),
-            Self::FloatExpected(e) => write!(f, "Expected Float here: {}", e),
-            Self::PestError(e) => write!(f, "Syntax Error{}", e),
-            Self::Rule(e) => write!(f, "RuleError: {:?}", e),
+            Self::Standard(e) => write!(f, "Error: {}.", e.error),
+            Self::ExprExpected => write!(f, "Expected expression"),
+            Self::IntExpected(e) => write!(f, "Expected int: {}", e),
+            Self::FloatExpected(e) => write!(f, "Expected float: {}", e),
+            Self::PestError(e) => write!(f, "Syntax error: {}", e),
+            Self::Rule(e) => write!(f, "Rule error: {:?}", e),
             Self::None => write!(f, "None returned"),
         }
     }

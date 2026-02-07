@@ -7,11 +7,11 @@ use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
-use rustyline::{Editor, Helper};
+use rustyline::{Cmd, Editor, EventHandler, Helper, KeyCode, KeyEvent, Modifiers};
 
 use cfg_if::cfg_if;
 
-use l::byte::I;
+use l::byte::{Env, I};
 use l::vm::V;
 
 // ---------------------------------------------------------------------------
@@ -22,9 +22,9 @@ const CYAN: &str = "\x1b[36m"; // operators
 const MAGENTA: &str = "\x1b[35m"; // combinators
 const YELLOW: &str = "\x1b[33m"; // numbers
 const GREEN: &str = "\x1b[32m"; // strings
-const BLUE: &str = "\x1b[34m"; // brackets
-const BOLD: &str = "\x1b[1m"; // assignment
-const GREY: &str = "\x1b[90m"; // comments, pipes
+const BLUE: &str = "\x1b[34m"; // brackets / parens
+const BOLD: &str = "\x1b[1m"; // special forms (λ ↻ :)
+const GREY: &str = "\x1b[90m"; // comments
 
 // ---------------------------------------------------------------------------
 // Alias replacement: ASCII names → unicode symbols
@@ -32,7 +32,6 @@ const GREY: &str = "\x1b[90m"; // comments, pipes
 
 /// (ascii name, unicode replacement)
 /// Longer names must come first to avoid partial matches
-/// (e.g. "scanl" before "scan")
 const ALIASES: &[(&str, &str)] = &[
     ("add", "+"),
     ("neg", "-"),
@@ -48,10 +47,12 @@ const ALIASES: &[(&str, &str)] = &[
     ("each", "ǁ"),
     ("fold", "/"),
     ("scanl", "\\"),
+    ("term", "|"),
+    ("lam", "λ"),
+    ("loop", "↻"),
 ];
 
 /// Check if a string starting at position `pos` in `chars` matches any alias name.
-/// Used to determine word boundaries — an alias adjacent to another alias is OK.
 fn is_alias_start(chars: &[char], pos: usize) -> bool {
     ALIASES.iter().any(|(name, _)| {
         let name_chars: Vec<char> = name.chars().collect();
@@ -63,14 +64,10 @@ fn is_alias_start(chars: &[char], pos: usize) -> bool {
 }
 
 /// Replace all ASCII aliases with their unicode counterparts.
-/// Aliases can be chained without spaces (e.g. "rhomodmon" → "ρ!:").
-/// Does not replace inside string literals.
 fn replace_aliases(input: &str) -> String {
     let mut result = input.to_string();
     let mut changed = true;
 
-    // Loop until no more replacements — handles chained aliases
-    // where replacing one exposes boundaries for the next
     while changed {
         changed = false;
         for &(name, symbol) in ALIASES {
@@ -83,7 +80,6 @@ fn replace_aliases(input: &str) -> String {
             let mut in_string = false;
 
             while i < len {
-                // Track string literals — don't replace inside them
                 if chars[i] == '"' {
                     in_string = !in_string;
                     out.push(chars[i]);
@@ -97,18 +93,14 @@ fn replace_aliases(input: &str) -> String {
                     continue;
                 }
 
-                // Check if the alias matches at this position
                 if i + name_len <= len {
                     let slice_matches = (0..name_len).all(|j| chars[i + j] == name_chars[j]);
 
                     if slice_matches {
-                        // char before must not be a letter or underscore
-                        // (unless it's a non-ASCII letter like ρ — those are symbols we inserted)
                         let before_ok = i == 0
                             || !(chars[i - 1].is_alphabetic()
                                 && chars[i - 1].is_ascii()
                                 && chars[i - 1] != '_');
-                        // char after must not be a letter/underscore that ISN'T the start of another alias
                         let after_ok = i + name_len >= len
                             || !(chars[i + name_len].is_alphabetic()
                                 && chars[i + name_len].is_ascii()
@@ -150,8 +142,7 @@ impl LinkHighlighter {
         while i < len {
             let ch = chars[i];
 
-            // Check for alias keywords — color them as their target operator type
-            // but keep the original text (rustyline requires same display width)
+            // Check for alias keywords
             if ch.is_ascii_alphabetic() {
                 if let Some((name, symbol)) = ALIASES.iter().find(|(name, _)| {
                     let name_chars: Vec<char> = name.chars().collect();
@@ -171,6 +162,7 @@ impl LinkHighlighter {
                 }) {
                     let color = match *symbol {
                         "/" | "\\" | "ǁ" => MAGENTA,
+                        "λ" | "↻" => BOLD,
                         _ => CYAN,
                     };
                     out.push_str(color);
@@ -183,8 +175,8 @@ impl LinkHighlighter {
                 }
             }
 
-            // Comments: -- to end of line
-            if ch == '-' && i + 1 < len && chars[i + 1] == '-' {
+            // Comments: ; to end of line
+            if ch == ';' {
                 out.push_str(GREY);
                 while i < len {
                     out.push(chars[i]);
@@ -202,7 +194,6 @@ impl LinkHighlighter {
                 while i < len {
                     out.push(chars[i]);
                     if chars[i] == '"' {
-                        // check for escaped ""
                         if i + 1 < len && chars[i + 1] == '"' {
                             i += 1;
                             out.push(chars[i]);
@@ -217,7 +208,7 @@ impl LinkHighlighter {
                 continue;
             }
 
-            // Numbers: digits, optional dot, more digits
+            // Numbers
             if ch.is_ascii_digit() {
                 out.push_str(YELLOW);
                 while i < len && (chars[i].is_ascii_digit() || chars[i] == '.') {
@@ -225,6 +216,15 @@ impl LinkHighlighter {
                     i += 1;
                 }
                 out.push_str(RESET);
+                continue;
+            }
+
+            // Special forms: λ ↻
+            if ch == 'λ' || ch == '↻' {
+                out.push_str(BOLD);
+                out.push(ch);
+                out.push_str(RESET);
+                i += 1;
                 continue;
             }
 
@@ -246,7 +246,7 @@ impl LinkHighlighter {
                 continue;
             }
 
-            // _ is min operator unless it's part of a variable name
+            // _ is min operator unless part of a variable name
             if ch == '_' {
                 let in_var = i > 0 && (chars[i - 1].is_alphanumeric());
                 if in_var {
@@ -269,16 +269,7 @@ impl LinkHighlighter {
                 continue;
             }
 
-            // Pipes
-            if ch == '|' {
-                out.push_str(GREY);
-                out.push(ch);
-                out.push_str(RESET);
-                i += 1;
-                continue;
-            }
-
-            // Assignment
+            // Assignment :
             if ch == ':' {
                 out.push_str(BOLD);
                 out.push(ch);
@@ -287,8 +278,17 @@ impl LinkHighlighter {
                 continue;
             }
 
-            // Brackets
-            if matches!(ch, '{' | '}' | '[' | ']' | '(' | ')') {
+            // Train terminator
+            if ch == '|' {
+                out.push_str(GREY);
+                out.push(ch);
+                out.push_str(RESET);
+                i += 1;
+                continue;
+            }
+
+            // Parentheses
+            if matches!(ch, '(' | ')') {
                 out.push_str(BLUE);
                 out.push(ch);
                 out.push_str(RESET);
@@ -333,19 +333,33 @@ impl Helper for LinkHighlighter {}
 fn main() {
     let mut rl = Editor::new().unwrap();
     rl.set_helper(Some(LinkHighlighter));
-    println!("l prompt. Expressions are line evaluated.");
+    // Ctrl+J inserts a newline; plain Enter submits.
+    rl.bind_sequence(
+        KeyEvent(KeyCode::Char('J'), Modifiers::CTRL),
+        EventHandler::Simple(Cmd::Newline),
+    );
+    // Tab inserts two spaces.
+    rl.bind_sequence(
+        KeyEvent(KeyCode::Tab, Modifiers::NONE),
+        EventHandler::Simple(Cmd::Insert(1, "  ".to_string())),
+    );
+    println!("link repl. Ctrl+J for newline. Ctrl+D to exit.");
+    let mut env = Env::default();
     loop {
         let readline = rl.readline(">> ");
         match readline {
             Ok(line) => {
                 let line = replace_aliases(&line);
                 let _ = rl.add_history_entry(&line);
-                let byte_code = I::fstring(&line);
+                let byte_code = I::fstring_with_env(&line, env.clone());
 
                 match byte_code {
                     Ok(it) => {
                         let mut vm = V::new(it);
                         vm.r();
+                        // Persist the environment regardless of error,
+                        // so assignments before an error are kept.
+                        env = vm.env();
                         match &vm.error {
                             Some(e) => println!("{}", e),
                             None => match vm.pop_last() {
@@ -358,11 +372,11 @@ fn main() {
                 }
             }
             Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                break;
+                // Ctrl+C: clear the current line and show a fresh prompt.
+                continue;
             }
             Err(ReadlineError::Eof) => {
-                println!("CTRL-D");
+                // Ctrl+D: exit.
                 break;
             }
             Err(err) => {

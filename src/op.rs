@@ -1,4 +1,4 @@
-use crate::ast::{CN, FN}; // 0.17.1
+use crate::ast::{CN, FN};
 
 const CONST: u8 = 1;
 const POP: u8 = 2;
@@ -14,6 +14,11 @@ const END: u8 = 11;
 const MO: u8 = 12;
 const DO: u8 = 13;
 const CO: u8 = 14;
+const CALL: u8 = 15; // call user-defined function
+const STORE: u8 = 16; // store variable binding: pops value, stores in lookup by name index
+const LOAD: u8 = 17; // load variable by name index
+const MCALL: u8 = 18; // monadic call: u16 = name index in constant pool (resolve to UFNV)
+const DCALL: u8 = 19; // dyadic call: u16 = name index in constant pool (resolve to UFNV)
 
 const FNPLUS: u8 = 1;
 const FNMINUS: u8 = 2;
@@ -51,6 +56,12 @@ pub enum OP {
     MO(u8),
     DO(u8),
     CO(u8),
+
+    CALL(u16),  // call function: u16 = number of args
+    STORE(u16), // store var: u16 = name index in constant pool
+    LOAD(u16),  // load var: u16 = name index in constant pool
+    MCALL(u16), // monadic user fn call: u16 = name index in constant pool
+    DCALL(u16), // dyadic user fn call: u16 = name index in constant pool
 }
 
 pub fn u16_to_u8(integer: u16) -> [u8; 2] {
@@ -70,25 +81,24 @@ fn make_o(code: u8, data: u16) -> Vec<u8> {
 pub fn get_op(op: OP) -> u8 {
     match op {
         OP::CONST(_) => CONST,
-
-        OP::POP => POP, // decimal repr is 2
-
+        OP::POP => POP,
         OP::JMP(_) => JMP,
-
         OP::GETL => GETL,
         OP::GETR => GETR,
         OP::CRVAR => CRVAR,
         OP::CLVAR => CLVAR,
-
         OP::DUP(_) => DUP,
-
         OP::MBL(_) => MBL,
         OP::DBL(_) => DBL,
         OP::END => END,
-
         OP::MO(_) => MO,
         OP::DO(_) => DO,
         OP::CO(_) => CO,
+        OP::CALL(_) => CALL,
+        OP::STORE(_) => STORE,
+        OP::LOAD(_) => LOAD,
+        OP::MCALL(_) => MCALL,
+        OP::DCALL(_) => DCALL,
     }
 }
 
@@ -120,13 +130,22 @@ pub fn make_op(op: OP) -> Vec<u8> {
     match op {
         OP::POP | OP::CLVAR | OP::CRVAR | OP::GETL | OP::GETR | OP::END => {
             vec![code]
-        } // decimal repr is 2
+        }
 
         OP::MO(a) => vec![MO, a],
         OP::DO(a) => vec![DO, a],
         OP::CO(a) => vec![CO, a],
 
-        OP::CONST(a) | OP::JMP(a) | OP::MBL(a) | OP::DBL(a) | OP::DUP(a) => make_o(code, a),
+        OP::CONST(a)
+        | OP::JMP(a)
+        | OP::MBL(a)
+        | OP::DBL(a)
+        | OP::DUP(a)
+        | OP::CALL(a)
+        | OP::STORE(a)
+        | OP::LOAD(a)
+        | OP::MCALL(a)
+        | OP::DCALL(a) => make_o(code, a),
     }
 }
 
@@ -147,6 +166,12 @@ pub fn byte_to_op(by: u8) -> Option<OP> {
         MO => Some(OP::MO(0)),
         DO => Some(OP::DO(0)),
         CO => Some(OP::CO(0)),
+
+        CALL => Some(OP::CALL(0)),
+        STORE => Some(OP::STORE(0)),
+        LOAD => Some(OP::LOAD(0)),
+        MCALL => Some(OP::MCALL(0)),
+        DCALL => Some(OP::DCALL(0)),
 
         _ => None,
     }

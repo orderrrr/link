@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use debug_print::debug_println;
 
 use crate::err::LErrEnum::ExprExpected as Er;
-use crate::{LErrEnum, LocatedError, URes, VURes, get_fnop, get_cnop};
+use crate::{get_cnop, get_fnop, LErrEnum, LocatedError, URes};
 
 use crate::{
     ast::{E, NN},
@@ -19,15 +19,19 @@ pub enum SET {
     MBL,
 }
 
+/// Persistent environment carried across REPL iterations.
+#[derive(Debug, Clone, Default)]
+pub struct Env {
+    pub var: Vec<NN>,
+    pub lookup: HashMap<String, u16>,
+}
+
 #[derive(Debug, Clone)]
 pub struct B {
     pub op: Vec<u8>,
-    // operations
     pub var: Vec<NN>,
-    // variables
     pub lookup: HashMap<String, u16>,
-    // lookup
-    pub code: HashMap<u16, (usize, usize)>, // code
+    pub code: HashMap<u16, (usize, usize)>,
 }
 
 impl B {
@@ -66,12 +70,20 @@ impl I {
         Self::fast(ast)
     }
 
+    /// Compile a string, seeding the compiler with an existing environment
+    /// so that variables defined in prior REPL lines are available.
+    pub fn fstring_with_env(s: &str, env: Env) -> BRes {
+        debug_println!("Compiling the source (with env): {}", s);
+        let ast: Vec<NN> = parse(s)?;
+        debug_println!("{:?}", ast);
+        Self::fast_with_env(ast, env)
+    }
+
     fn fast(a: Vec<NN>) -> BRes {
         let mut i = I::new();
         let mut e: Option<LocatedError<LErrEnum>> = None;
         a.into_iter().for_each(|n| {
             debug_println!("Compiling node {:?}", n);
-
             match i.inode(n.clone(), None) {
                 Ok(_) => (),
                 Err(err) => {
@@ -79,8 +91,9 @@ impl I {
                     return;
                 }
             };
+            // Don't add POP after assignments or do-blocks that contain assignments
             match n.n {
-                E::ASEXP { op: _, rhs: _ } => return,
+                E::ASEXP { .. } => return,
                 _ => (),
             };
             match i.addop(n, OP::POP) {
@@ -94,7 +107,39 @@ impl I {
         if e.is_some() {
             return Err(e.unwrap());
         }
+        Ok(i.b)
+    }
 
+    fn fast_with_env(a: Vec<NN>, env: Env) -> BRes {
+        let mut i = I::new();
+        // Seed the compiler with the prior environment
+        i.b.var = env.var;
+        i.b.lookup = env.lookup;
+        let mut e: Option<LocatedError<LErrEnum>> = None;
+        a.into_iter().for_each(|n| {
+            debug_println!("Compiling node {:?}", n);
+            match i.inode(n.clone(), None) {
+                Ok(_) => (),
+                Err(err) => {
+                    e = Some(err);
+                    return;
+                }
+            };
+            match n.n {
+                E::ASEXP { .. } => return,
+                _ => (),
+            };
+            match i.addop(n, OP::POP) {
+                Ok(_) => (),
+                Err(err) => {
+                    e = Some(err);
+                    return;
+                }
+            };
+        });
+        if e.is_some() {
+            return Err(e.unwrap());
+        }
         Ok(i.b)
     }
 
@@ -124,237 +169,269 @@ impl I {
     }
 
     fn upop(&mut self, j: u16, i: u16) {
-        // kind of unsafe
         let u8: [u8; 2] = u16_to_u8(j);
         self.b.op[i as usize + 1] = u8[0];
         self.b.op[i as usize + 2] = u8[1];
     }
 
-    fn addmap(&mut self, n: NN, ci: u16) {
-        match n.n {
-            E::VAL(s) => self.b.lookup.insert(s, ci),
-            _ => unreachable!("unreachable"),
-        };
-    }
-
-    fn irvar(&mut self, n: NN) -> URes {
-        match n.n {
-            E::INT(_) | E::FT(_) | E::ST(_) | E::LIST(_) => {
-                let ci = self.addvar(n.clone());
-                self.addlookup("a", ci);
-                Ok(ci.to_owned())
-            }
-            E::VAL(x) => {
-                let ci = self.b.lookup.get(&x).ok_or(Er)?;
-                Ok(ci.to_owned())
-            }
-            _ => unreachable!("unreachable got: {}", n),
-        }
-    }
-
-    fn ilvar(&mut self, n: NN) -> URes {
-        match n.n {
-            E::INT(_) | E::FT(_) | E::ST(_) | E::LIST(_) => {
-                let ci = self.addvar(n.clone());
-                self.addlookup("w", ci);
-                Ok(ci)
-            }
-            E::VAL(x) => {
-                let ci = self.b.lookup.get(&x).ok_or(Er)?;
-                Ok(ci.to_owned())
-            }
-            _ => unreachable!("unreachable"),
-        }
-    }
-
     fn inode(&mut self, n: NN, s: Option<SET>) -> URes {
-        let set = s.unwrap_or_default();
-        println!("CURRENT NODE: {}", n.clone());
+        let _set = s.unwrap_or_default();
+        debug_println!("CURRENT NODE: {}", n.clone());
         match n.clone().n {
-            E::INT(_) | E::FT(_) | E::ST(_) | E::LIST(_) => {
-                // let ci = self.addvar(n.clone());
-                // self.addop(n, OP::CONST(ci))
-                let ci = self.addvar(n.clone());
+            E::INT(_) | E::FT(_) | E::ST(_) | E::LIST(_) | E::BOOL(_) => {
+                // For LIST, recursively compile elements first
+                let node = match &n.n {
+                    E::LIST(elems) => {
+                        // Compile each element, build a runtime LIST
+                        let compiled_elems: Result<Vec<NN>, _> = elems
+                            .iter()
+                            .map(|e| {
+                                // For literal elements, just keep them
+                                Ok(e.clone())
+                            })
+                            .collect();
+                        NN::nd(E::LIST(
+                            compiled_elems.map_err(|_: ()| LocatedError::from(Er))?,
+                        ))
+                    }
+                    _ => n.clone(),
+                };
+                let ci = self.addvar(node);
                 self.addop(n, OP::CONST(ci))
             }
-            E::VAL(v) => {
-                // match v {
-                //     "w" | "a" => self.addop(n, op)
-                // }
-                println!("v is: {}", v);
-                println!("lookup is: {:?}", self.b.lookup);
 
-                match v.as_str() {
-                    "w" => self.addop(n, OP::GETL),
-                    "r" => self.addop(n, OP::GETR),
-                    _ => {
-                        let ci = self.b.lookup.get(&v).unwrap().to_owned();
+            E::VAL(v) => {
+                debug_println!("v is: {}", v);
+                debug_println!("lookup is: {:?}", self.b.lookup);
+                match self.b.lookup.get(&v) {
+                    Some(ci) => {
+                        let ci = ci.to_owned();
                         self.addop(n, OP::CONST(ci))
+                    }
+                    None => {
+                        // Variable not yet defined — store as a name for late binding
+                        let name_node = NN::nd(E::ST(v.clone()));
+                        let ci = self.addvar(name_node);
+                        self.addop(n, OP::LOAD(ci))
                     }
                 }
             }
-            E::FVAL(v) => {
-                let ci = self.b.lookup.get(&v).unwrap().to_owned();
-                self.addop(n, OP::JMP(ci))
+
+            E::ASEXP { name, rhs } => {
+                // Compile the rhs
+                self.inode(*rhs.clone(), None)?;
+
+                // Store the name in the constant pool
+                let name_node = NN::nd(E::ST(name.clone()));
+                let name_idx = self.addvar(name_node);
+
+                // After the rhs is on the stack, STORE pops it and binds to name
+                self.addop(n, OP::STORE(name_idx))
             }
-            E::ASEXP { op, rhs } => {
-                let blp = self.addop(n.clone(), OP::JMP(0))? - 3;
 
-                match rhs.n {
-                    E::FBLOCK(_) | E::TFBLOCK(_) | E::TMFBLOCK(_) => self.inode(*rhs, None),
-                    _ => unreachable!("unreachable"),
-                }?;
-                self.addmap(*op, blp + 3);
-
-                let end = self.addop(n, OP::END)?;
-                self.upop(end, blp);
-                Ok(end)
+            E::DOBLOCK(exprs) => {
+                let len = exprs.len();
+                let mut last = 0u16;
+                for (i, expr) in exprs.into_iter().enumerate() {
+                    let is_last = i == len - 1;
+                    let is_assign = matches!(&expr.n, E::ASEXP { .. });
+                    last = self.inode(expr.clone(), None)?;
+                    // POP intermediate results (but not assignments, not the last expr)
+                    if !is_last && !is_assign {
+                        self.addop(expr, OP::POP)?;
+                    }
+                }
+                Ok(last)
             }
-            E::MEXP { op, rhs } => {
-                let r = self.irvar(*rhs.clone())?;
-                self.addop(*rhs, OP::CONST(r))?;
 
-                let blp = self.addop(n.clone(), OP::MBL(0))?;
+            E::LAMBDA { params, body } => {
+                // Compile lambda as: JMP past body, then body code, then END
+                // The UFNV captures the body bytecode + constants so it is
+                // self-contained and works across REPL compilation units.
 
-                op.into_iter()
-                        .rev()
-                        .map(|o| self.inode(o, None))
-                        .last()
-                        .ok_or(Er)??;
+                // Emit JMP to skip past the body (will be patched)
+                let jmp_pos = self.addop(n.clone(), OP::JMP(0))? - 3;
 
-                let end = self.addop(n, OP::END)?;
-                self.upop(end, blp - 3);
-                Ok(end)
+                let nparams = params.len();
+                let body_start = (jmp_pos + 3) as usize;
+
+                // Body: bind params from stack, execute body, leave result on stack
+                // Params are pushed in order by the caller, so we pop them in reverse
+                // NOTE: we intentionally do NOT addlookup for params here. This forces
+                // the body's references to params to use LOAD (runtime resolution)
+                // instead of CONST (which would push the name string, not the value).
+                for param in params.iter().rev() {
+                    let name_node = NN::nd(E::ST(param.clone()));
+                    let name_idx = self.addvar(name_node);
+                    self.addop(n.clone(), OP::STORE(name_idx))?;
+                }
+
+                // Compile body expressions
+                let body_len = body.len();
+                for (i, expr) in body.into_iter().enumerate() {
+                    let is_last = i == body_len - 1;
+                    let is_assign = matches!(&expr.n, E::ASEXP { .. });
+                    self.inode(expr.clone(), None)?;
+                    if !is_last && !is_assign {
+                        self.addop(expr, OP::POP)?;
+                    }
+                }
+
+                let end_pos = self.addop(n.clone(), OP::END)?;
+
+                // Patch the JMP to skip to after END
+                self.upop(end_pos, jmp_pos);
+
+                // Extract the body bytecode (from body_start up to end_pos)
+                let body_op = self.b.op[body_start..end_pos as usize].to_vec();
+                // Snapshot the full constant pool so indices remain valid
+                let body_var = self.b.var.clone();
+
+                let lambda_node = NN::nd(E::UFNV {
+                    nparams,
+                    body_op,
+                    body_var,
+                });
+                let lambda_idx = self.addvar(lambda_node);
+                self.addop(n, OP::CONST(lambda_idx))
             }
-            E::DEXP { op, lhs, rhs } => {
-                let l = self.irvar(*rhs.clone())?;
-                let r = self.ilvar(*lhs.clone())?;
-                self.addop(*lhs, OP::CONST(l))?;
-                self.addop(*rhs, OP::CONST(r))?;
 
-                let blp = self.addop(n.clone(), OP::DBL(0))?;
+            E::APPLY { train, args } => {
+                let nargs = args.len();
 
-                op.into_iter()
-                        .rev()
-                        .map(|o| self.inode(o, Some(SET::DBL)))
-                        .last()
-                        .ok_or(Er)??;
+                match nargs {
+                    1 => {
+                        // Monadic: push arg, then apply train
+                        let rhs = args.into_iter().next().ok_or(Er)?;
+                        self.inode(rhs.clone(), None)?;
+                        self.addlookup("a", (self.b.var.len().max(1) - 1) as u16);
 
-                let end = self.addop(n, OP::END)?;
-                self.upop(end, blp - 3);
-                Ok(end)
-            }
-            E::MFN(_) => {
-                self.fnode(n)
-            }
-            E::DFN(_) => {
-                self.fnode(n)
-            }
-            E::MCO { o, co } => {
-                self.fnode(*o)?;
-                self.fnode(*co)
-            }
-            E::DCO { o, co } => {
-                self.fnode(*o)?;
-                self.fnode(*co)
-            }
-            E::BL(block) => {
-                let blp = self.addop(n.clone(), I::get_op(set, 0))?;
+                        let blp = self.addop(n.clone(), OP::MBL(0))?;
 
-                let end = self.inode(*block, None)?;
+                        // Compile train in reverse (rightmost applied first)
+                        let train_vec: Vec<NN> = train;
+                        for t in train_vec.into_iter().rev() {
+                            self.compile_train_elem(t, true)?;
+                        }
 
-                self.upop(end, blp - 2);
-                self.addop(n, OP::END)
-            }
-            E::FBLOCK(block) | E::MFBLOCK(block) => {
-                let blp = self.addop(n.clone(), I::get_op(set, 0))?;
+                        let end = self.addop(n, OP::END)?;
+                        self.upop(end, blp - 3);
+                        Ok(end)
+                    }
+                    2 => {
+                        // Dyadic: push both args, then apply train
+                        let mut args_iter = args.into_iter();
+                        let lhs = args_iter.next().ok_or(Er)?;
+                        let rhs = args_iter.next().ok_or(Er)?;
 
-                let end = block
-                        .into_iter()
-                        .rev()
-                        .map(|o| self.inode(o, None))
-                        .last()
-                        .ok_or(Er)??;
+                        // For dyadic: rhs is "a" (right arg), lhs is "w" (left arg)
+                        self.inode(rhs.clone(), None)?;
+                        self.addlookup("a", (self.b.var.len().max(1) - 1) as u16);
 
-                self.upop(end, blp - 3);
-                // self.addop(n, OP::END(blp - 2))
-                self.addop(n, OP::END)
-            }
-            E::TFBLOCK(block) => {
-                let blp = self.addop(n.clone(), I::get_op(set, 0))?;
-                self.addop(n.clone(), OP::GETL)?;
-                self.addop(n.clone(), OP::GETR)?;
-                let end = block
-                        .into_iter()
-                        .rev()
-                        .map(|o| self.inode(o, None))
-                        .last()
-                        .ok_or(Er)??;
-                self.upop(end, blp - 3);
-                self.addop(n, OP::END)
-            }
-            E::TMFBLOCK(block) => {
-                let blp = self.addop(n.clone(), I::get_op(set, 0))?;
-                self.addop(n.clone(), OP::GETR)?;
-                let end = block
-                        .into_iter()
-                        .rev()
-                        .map(|o| self.inode(o, None))
-                        .last()
-                        .ok_or(Er)??;
-                self.upop(end, blp - 3);
-                self.addop(n, OP::END)
-            }
-            E::MTRAIN(train) | E::DTRAIN(train) => train
-                    .into_iter()
-                    .rev()
-                    .map(|t| self.inode(t, None))
-                    .last()
-                    .ok_or(Er)?,
-            E::DDTRAIN { op, lhs } => {
-                let blp = self.addop(n.clone(), OP::DBL(0))?;
-                self.inode(*lhs, Some(SET::DBL))?;
-                op.into_iter()
-                        .rev()
-                        .map(|o| self.inode(o, None))
-                        .collect::<VURes>()?;
-                let end = self.addop(n, OP::END);
-                self.upop(end.clone()?, blp - 3);
-                end
-                // self.addop(n, OP::CLVAR)
-            }
-            E::DBLOCK { op, lhs } => {
-                let blp = self.addop(n.clone(), I::get_op(SET::DBL, 0))?;
+                        self.inode(lhs.clone(), None)?;
+                        self.addlookup("w", (self.b.var.len().max(1) - 1) as u16);
 
-                // dup needs to have start and end
-                let dlp = self.addop(n.clone(), OP::DUP(0))?;
-                self.inode(*lhs, None)?;
-                let dend = self.addop(n.clone(), OP::END)?;
-                self.upop(dend.clone(), dlp -3);
+                        let blp = self.addop(n.clone(), OP::DBL(0))?;
 
-                op
-                        .into_iter()
-                        .rev()
-                        .map(|o| self.inode(o, None))
-                        .collect::<VURes>()?
-                        .last()
-                        .ok_or(Er)?;
+                        // Compile train in reverse (right-to-left evaluation).
+                        // In a dyadic context with a multi-element train:
+                        //   - Rightmost elements apply monadically to rhs
+                        //   - Leftmost element applies dyadically (lhs + chain result)
+                        // Single-element train: the one op is dyadic.
+                        let train_vec: Vec<NN> = train;
+                        let train_len = train_vec.len();
+                        for (i, t) in train_vec.into_iter().rev().enumerate() {
+                            let is_last_in_reverse = i == train_len - 1;
+                            if train_len == 1 {
+                                // Single-op train: dyadic
+                                self.compile_train_elem(t, false)?;
+                            } else if is_last_in_reverse {
+                                // Leftmost element (last in reverse): dyadic
+                                self.compile_train_elem(t, false)?;
+                            } else {
+                                // Rightmost and intermediate ops: monadic
+                                self.compile_train_elem(t, true)?;
+                            }
+                        }
 
-                let end = self.addop(n, OP::END);
-                self.upop(end.clone()?, blp - 3);
-                end
+                        let end = self.addop(n, OP::END)?;
+                        self.upop(end, blp - 3);
+                        Ok(end)
+                    }
+                    _ => {
+                        // Variadic — not yet supported for built-in trains
+                        // Could be a user function call with multiple args
+                        // For now, treat as monadic with a list arg
+                        Err(LocatedError::from(Er))
+                    }
+                }
             }
-            E::CN(_) | E::BOOL(_) => {
-                unreachable!("should not see this here")
+
+            E::MFN(_)
+            | E::DFN(_)
+            | E::CN(_)
+            | E::MCO { .. }
+            | E::DCO { .. }
+            | E::MOP(_)
+            | E::UFNV { .. } => {
+                // These should only appear inside trains, not as top-level nodes
+                Err(LocatedError::from(Er))
             }
         }
     }
 
-    fn fnode(&mut self, n: NN) -> URes {
-        match n.n {
-            E::MFN(fun) => self.addop(n, OP::MO(get_fnop(fun))),
-            E::DFN(fun) => self.addop(n, OP::DO(get_fnop(fun))),
-            E::CN(fun) => self.addop(n, OP::CO(get_cnop(fun))),
+    /// Compile a single train element (op, combinator, cfn, name, or monadic override)
+    fn compile_train_elem(&mut self, t: NN, monadic: bool) -> URes {
+        match t.n.clone() {
+            E::MFN(fun) => {
+                if monadic {
+                    self.addop(t, OP::MO(get_fnop(fun)))
+                } else {
+                    self.addop(t, OP::DO(get_fnop(fun)))
+                }
+            }
+            E::DFN(fun) => self.addop(t, OP::DO(get_fnop(fun))),
+            E::CN(cn) => self.addop(t, OP::CO(get_cnop(cn))),
+            E::MOP(fun) => {
+                // Monadic override: always emit as MO regardless of context
+                self.addop(t, OP::MO(get_fnop(fun)))
+            }
+            E::MCO { o, co } | E::DCO { o, co } => {
+                // Operator + combinator pair
+                // In monadic context, emit the op as MO then the combinator
+                // In dyadic context, emit the op as DO then the combinator
+                match monadic {
+                    true => {
+                        self.compile_train_elem(*o, true)?;
+                        self.compile_train_elem(*co, true)
+                    }
+                    false => {
+                        // For dyadic cfn like +/ in a dyadic context,
+                        // the operator becomes dyadic
+                        match o.n.clone() {
+                            E::MFN(fun) => {
+                                self.addop(*o, OP::DO(get_fnop(fun)))?;
+                            }
+                            _ => {
+                                self.compile_train_elem(*o, false)?;
+                            }
+                        }
+                        self.compile_train_elem(*co, false)
+                    }
+                }
+            }
+            E::VAL(name) => {
+                // A name in a train — this is a user function reference
+                // Emit MCALL (monadic) or DCALL (dyadic) with the name index
+                // so the VM can resolve the function at runtime
+                let name_node = NN::nd(E::ST(name));
+                let ci = self.addvar(name_node);
+                if monadic {
+                    self.addop(t, OP::MCALL(ci))
+                } else {
+                    self.addop(t, OP::DCALL(ci))
+                }
+            }
             _ => Err(LocatedError::from(Er)),
         }
     }

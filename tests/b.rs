@@ -1,66 +1,44 @@
-use std::collections::HashMap;
+// Bytecode tests for the new S-expression syntax
+// These test the compilation pipeline: source → parse → bytecode
 
-use l::{
-    ast::{E, FN, NN},
-    byte::{B, I},
-    op::{make_op, OP}, get_fnop,
-};
+use l::byte::I;
 
 #[test]
-fn basics() {
-    let b = I::fstring("-1");
-    let ei = vec![
-        OP::CONST(0), 
-        OP::MBL(9), 
-        OP::MO(get_fnop(FN::Minus)),
-        OP::END,
-        OP::POP]
-        .into_iter()
-        .flat_map(make_op)
-        .collect();
-    assert_eq!(
-        B {
-            op: ei,
-            var: vec![NN {
-                n: E::INT(1),
-                start: 1,
-                end: 2,
-            }],
-            lookup: HashMap::from([(String::from("a"), 0)]),
-            code: HashMap::new(),
-        },
-        b.unwrap()
-    );
+fn compile_int() {
+    // A bare integer should compile and produce bytecode
+    let b = I::fstring("42");
+    assert!(b.is_ok(), "failed to compile '42': {:?}", b.err());
+    let b = b.unwrap();
+    assert!(!b.op.is_empty());
+    assert_eq!(b.var.len(), 1); // one constant: 42
 }
 
 #[test]
-fn closures() {
-    let b = I::fstring("{-a}|1");
-    let ei = vec![
-        OP::CONST(0),
-        OP::MBL(20),
-        OP::MBL(18),
-        OP::CONST(0),
-        OP::MBL(18),
-        OP::MO(get_fnop(FN::Minus)),
-        OP::END,
-        OP::END,
-        OP::END,
-        OP::POP,
-    ]
-    .into_iter()
-    .flat_map(make_op)
-    .collect();
-    let exp = B {
-        op: ei,
-        var: vec![NN {
-            n: E::INT(1),
-            start: 4,
-            end: 5,
-        }],
-        lookup: HashMap::from([(String::from("a"), 0)]),
-        code: HashMap::new(),
-    };
+fn compile_monadic() {
+    // (-| 1) should compile
+    let b = I::fstring("(-| 1)");
+    assert!(b.is_ok(), "failed to compile '(-| 1)': {:?}", b.err());
+    let b = b.unwrap();
+    assert!(!b.op.is_empty());
+}
 
-    assert_eq!(exp, b.unwrap())
+#[test]
+fn compile_dyadic() {
+    // (+| 2 3) should compile
+    let b = I::fstring("(+| 2 3)");
+    assert!(b.is_ok(), "failed to compile '(+| 2 3)': {:?}", b.err());
+}
+
+#[test]
+fn compile_train() {
+    // (+/!| 10) should compile
+    let b = I::fstring("(+/!| 10)");
+    assert!(b.is_ok(), "failed to compile '(+/!| 10)': {:?}", b.err());
+}
+
+#[test]
+fn compile_list_literal() {
+    // (1 2 3) should compile as a list
+    let b = I::fstring("(1 2 3)");
+    assert!(b.is_ok(), "failed to compile '(1 2 3)': {:?}", b.err());
 }

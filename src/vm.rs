@@ -6,7 +6,7 @@ use rayon::prelude::*;
 
 use crate::{
     ast::{CN, E, FN, NN},
-    byte::B,
+    byte::{Env, B},
     byte_to_fn,
     op::{byte_to_op, u8_to_u, OP},
     op_to_co,
@@ -44,7 +44,7 @@ fn type_name(n: &NN) -> &'static str {
         E::ST(_) => "string",
         E::LIST(_) => "list",
         E::VAL(_) => "value",
-        E::FVAL(_) => "fnvalue",
+        E::UFNV { .. } => "fn",
         _ => "node",
     }
 }
@@ -111,6 +111,15 @@ impl V {
         }
     }
 
+    /// Extract the environment (variable pool + lookup table) after execution,
+    /// so it can be carried into the next REPL iteration.
+    pub fn env(&self) -> Env {
+        Env {
+            var: self.b.var.clone(),
+            lookup: self.b.lookup.clone(),
+        }
+    }
+
     fn run(&mut self) -> Result<(), VMError> {
         let mut ip = 0;
         while ip < self.b.op.len() {
@@ -123,22 +132,18 @@ impl V {
 
             match op {
                 OP::CONST(_) => {
-                    println!("\n\n-------- CONST --------");
+                    debug_println!("\n\n-------- CONST --------");
                     let const_idx = u8_to_u(self.b.op[ip], self.b.op[ip + 1]);
                     ip += 2;
                     self.push(self.b.var[const_idx].clone());
                     debug_println!("pushed: {}", self.s.last().unwrap());
                 }
                 OP::POP => {
-                    println!("\n\n-------- POP --------");
-                    let prev_op = byte_to_op(self.b.op[ip - 4]);
-
-                    debug_println!("prev op: {:?}", prev_op);
-
+                    debug_println!("\n\n-------- POP --------");
                     self.pop();
                 }
                 OP::JMP(_) => {
-                    println!("\n\n-------- JMP --------");
+                    debug_println!("\n\n-------- JMP --------");
 
                     let us = self.get_usize(iaddr);
                     self.cpush(C::new(us, BL::JMP));
@@ -147,13 +152,12 @@ impl V {
                     ip = i as usize;
                 }
                 OP::DUP(_) => {
-                    println!("\n\n-------- DUP --------");
+                    debug_println!("\n\n-------- DUP --------");
 
                     let c = self.cget();
 
                     let us = self.get_usize(iaddr);
                     self.cpush(C::new(us, BL::DUP));
-                    println!("cget: {:?}", self.cget());
 
                     match c.t {
                         BL::DBL => {
@@ -163,47 +167,32 @@ impl V {
                         _ => self.dup(),
                     }
 
-                    println!("-------- RESULT");
-                    println!("ptr: {}", self.s.len());
-                    println!("top of stack: {}", self.s.last().unwrap());
                     ip += 2;
                 }
                 OP::DBL(_) => {
-                    println!("\n\n-------- DBL --------");
+                    debug_println!("\n\n-------- DBL --------");
 
                     self.ddup();
                     self.ddup();
 
                     let us = self.get_usize(iaddr);
                     self.cpush(C::new(us, BL::DBL));
-                    println!("cget: {:?}", self.cget());
 
-                    println!("-------- RESULT");
-                    println!("cget: {:?}", self.cget());
-                    println!("ptr: {}", self.s.len());
-                    println!("top of stack: {}", self.s.last().unwrap());
                     ip += 2;
                 }
                 OP::MBL(_) => {
-                    println!("\n\n-------- MBL --------");
+                    debug_println!("\n\n-------- MBL --------");
 
                     self.dup();
 
                     let us = self.get_usize(iaddr);
                     self.cpush(C::new(us, BL::MBL));
-                    println!("-------- RESULT");
-                    println!("cget: {:?}", self.cget());
-                    println!("ptr: {}", self.s.len());
-                    println!("top of stack: {}", self.s.last().unwrap());
 
                     ip += 2;
                 }
                 OP::MO(_) => {
                     let mo = byte_to_fn(self.b.op[ip]);
-                    println!("\n\n-------- MO {} --------", mo);
-
-                    println!("ptr: {}", self.s.len());
-                    println!("top of stack: {}", self.s.last().unwrap());
+                    debug_println!("\n\n-------- MO {} --------", mo);
 
                     // In a DBL context, temporarily hide the extra duplicated value
                     let dbl_stashed = match self.cget().t {
@@ -211,17 +200,10 @@ impl V {
                         _ => None,
                     };
 
-                    println!("ptr: {}", self.s.len());
-                    println!("top of stack: {}", self.s.last().unwrap());
-
                     let co = byte_to_op(self.b.op[ip + 1]).unwrap();
                     let co = op_to_co(co, self.b.op[ip + 2]);
 
                     self.cmo(co, mo, ip)?;
-
-                    println!("-------- RESULT");
-                    println!("ptr: {}", self.s.len());
-                    println!("top of stack: {}", self.s.last().unwrap());
 
                     match co {
                         Some(_) => ip += 3,
@@ -235,7 +217,7 @@ impl V {
                 }
                 OP::DO(_) => {
                     let dfn = byte_to_fn(self.b.op[ip]);
-                    println!("\n\n-------- DO {} --------", dfn);
+                    debug_println!("\n\n-------- DO {} --------", dfn);
 
                     let co = byte_to_op(self.b.op[ip + 1]).unwrap();
                     let co = op_to_co(co, self.b.op[ip + 2]);
@@ -248,27 +230,22 @@ impl V {
                         Some(_) => ip += 3,
                         None => ip += 1,
                     }
-
-                    println!("-------- RESULT");
-                    println!("ptr: {}", self.s.len());
-                    println!("top of stack: {}", self.s.last().unwrap());
                 }
                 OP::CLVAR => {
-                    println!("\n\n-------- CLVAR --------");
-                    println!("pop is {}", self.pop());
+                    debug_println!("\n\n-------- CLVAR --------");
+                    self.pop();
                 }
                 OP::END => {
-                    println!("\n\n-------- END --------");
+                    debug_println!("\n\n-------- END --------");
 
                     let c = self.cpop();
 
                     match c.t {
                         BL::DBL => {
-                            println!("\n\n-------- DBLEND --------");
+                            debug_println!("\n\n-------- DBLEND --------");
                             self.pop();
                             let res = self.pop();
-                            println!("HERE: {}", self.pop());
-                            println!("RES HERE: {}", res);
+                            self.pop();
 
                             let c = self.cget();
                             match c.t {
@@ -283,10 +260,9 @@ impl V {
                             }
                         }
                         BL::MBL => {
-                            println!("\n\n-------- MBLEND --------");
+                            debug_println!("\n\n-------- MBLEND --------");
                             let res = self.pop();
-                            println!("HERE: {}", self.pop());
-                            println!("RES HERE: {}", res);
+                            self.pop();
                             match c.t {
                                 BL::DBL => {
                                     let rhs = self.pop();
@@ -298,40 +274,193 @@ impl V {
                                 }
                             }
                         }
+
                         _ => (),
                     }
 
-                    println!("-------- RESULT");
-                    println!("cptr = {}", self.cptr);
-                    println!("cip = {}", c.ip);
-                    println!("ptr: {}", self.s.len());
-                    if let Some(top) = self.s.last() {
-                        println!("top of stack: {}", top);
-                    }
                     ip = c.ip;
                 }
                 OP::GETL => {
-                    println!("\n\n-------- GETL --------");
-
-                    debug_println!("current lhs: {}", self.s.last().unwrap());
-                    debug_println!("current rhs: {}", self.s[self.s.len() - 2]);
+                    debug_println!("\n\n-------- GETL --------");
                     self.push(
                         self.b.var[self.b.lookup.get("w").unwrap().to_owned() as usize].clone(),
                     );
                 }
                 OP::GETR => {
-                    println!("\n\n-------- GETR --------");
-
-                    debug_println!("current lhs: {}", self.s.last().unwrap());
-                    debug_println!("current rhs: {}", self.s[self.s.len() - 2]);
+                    debug_println!("\n\n-------- GETR --------");
                     self.push(
                         self.b.var[self.b.lookup.get("a").unwrap().to_owned() as usize].clone(),
                     );
+                }
+                OP::STORE(_) => {
+                    debug_println!("\n\n-------- STORE --------");
+                    let name_idx = u8_to_u(self.b.op[ip], self.b.op[ip + 1]);
+                    ip += 2;
+
+                    // Get the name from the constant pool
+                    let name = match &self.b.var[name_idx].n {
+                        E::ST(s) => s.clone(),
+                        _ => {
+                            return Err(VMError::new(
+                                "STORE: expected string name in constant pool",
+                            ))
+                        }
+                    };
+
+                    // Pop the value from the stack
+                    let val = self.pop();
+                    debug_println!("STORE: {} = {}", name, val);
+
+                    // Store the value in the constant pool and update lookup
+                    let val_idx = self.b.var.len() as u16;
+                    self.b.var.push(val);
+                    self.b.lookup.insert(name, val_idx);
+                }
+                OP::LOAD(_) => {
+                    debug_println!("\n\n-------- LOAD --------");
+                    let name_idx = u8_to_u(self.b.op[ip], self.b.op[ip + 1]);
+                    ip += 2;
+
+                    // Get the name from the constant pool
+                    let name = match &self.b.var[name_idx].n {
+                        E::ST(s) => s.clone(),
+                        _ => {
+                            return Err(VMError::new("LOAD: expected string name in constant pool"))
+                        }
+                    };
+
+                    // Look up the value
+                    let val_idx = self
+                        .b
+                        .lookup
+                        .get(&name)
+                        .ok_or_else(|| VMError::new(format!("undefined variable: {}", name)))?
+                        .to_owned();
+                    self.push(self.b.var[val_idx as usize].clone());
+                }
+                OP::CALL(_) => {
+                    debug_println!("\n\n-------- CALL --------");
+                    let _nargs = u8_to_u(self.b.op[ip], self.b.op[ip + 1]);
+                    // ip += 2; // would advance past args, but we return early
+                    // TODO: implement function call
+                    return Err(VMError::new("CALL not yet implemented"));
+                }
+                OP::MCALL(_) => {
+                    debug_println!("\n\n-------- MCALL --------");
+                    let name_idx = u8_to_u(self.b.op[ip], self.b.op[ip + 1]);
+                    ip += 2;
+
+                    let (nparams, body_op, body_var) = self.resolve_ufnv(name_idx, "MCALL")?;
+                    if nparams != 1 {
+                        return Err(VMError::new(format!(
+                            "MCALL: function expects {} args, got 1",
+                            nparams
+                        )));
+                    }
+
+                    // In a DBL context, temporarily hide the extra duplicated value
+                    let dbl_stashed = match self.cget().t {
+                        BL::DBL => Some(self.s.pop().expect("stack underflow")),
+                        _ => None,
+                    };
+
+                    // Pop the arg, run the function body, push the result
+                    let arg = self.pop();
+                    let result = Self::run_ufnv(&body_op, &body_var, vec![arg])?;
+                    self.push(result);
+
+                    // Restore stashed value
+                    if let Some(stashed) = dbl_stashed {
+                        self.s.push(stashed);
+                    }
+                }
+                OP::DCALL(_) => {
+                    debug_println!("\n\n-------- DCALL --------");
+                    let name_idx = u8_to_u(self.b.op[ip], self.b.op[ip + 1]);
+                    ip += 2;
+
+                    let (nparams, body_op, body_var) = self.resolve_ufnv(name_idx, "DCALL")?;
+                    if nparams != 2 {
+                        return Err(VMError::new(format!(
+                            "DCALL: function expects {} args, got 2",
+                            nparams
+                        )));
+                    }
+
+                    // Pop both args (lhs on top, rhs below)
+                    let lhs = self.pop();
+                    let rhs = self.pop();
+                    let result = Self::run_ufnv(&body_op, &body_var, vec![lhs, rhs])?;
+                    self.push(result);
+
+                    // Dyadic ops dup the result for the next train element
+                    self.dup();
                 }
                 _ => return Err(VMError::new(format!("unimplemented instruction: {:?}", op))),
             }
         }
         Ok(())
+    }
+
+    /// Resolve a constant-pool name index to a UFNV, returning (nparams, body_op, body_var).
+    fn resolve_ufnv(
+        &self,
+        name_idx: usize,
+        ctx: &str,
+    ) -> Result<(usize, Vec<u8>, Vec<NN>), VMError> {
+        let name = match &self.b.var[name_idx].n {
+            E::ST(s) => s.clone(),
+            _ => {
+                return Err(VMError::new(format!(
+                    "{}: expected string name in constant pool",
+                    ctx
+                )))
+            }
+        };
+        let val_idx = self
+            .b
+            .lookup
+            .get(&name)
+            .ok_or_else(|| VMError::new(format!("undefined variable: {}", name)))?
+            .to_owned();
+        let fn_val = &self.b.var[val_idx as usize];
+        match &fn_val.n {
+            E::UFNV {
+                nparams,
+                body_op,
+                body_var,
+            } => Ok((*nparams, body_op.clone(), body_var.clone())),
+            _ => Err(VMError::new(format!(
+                "{}: {} is not a function, got {}",
+                ctx,
+                name,
+                type_name(fn_val)
+            ))),
+        }
+    }
+
+    /// Run a UFNV's body bytecode with the given arguments.
+    /// Arguments are placed on the stack (in order) before execution.
+    /// The body's STORE instructions will pop them and bind to param names.
+    /// Returns the last value left on the stack.
+    fn run_ufnv(body_op: &[u8], body_var: &[NN], args: Vec<NN>) -> VmRes {
+        use std::collections::HashMap;
+
+        let b = B {
+            op: body_op.to_vec(),
+            var: body_var.to_vec(),
+            lookup: HashMap::new(),
+            code: HashMap::new(),
+        };
+        let mut vm = V::new(b);
+        // Push args onto the stack (the body's STORE instructions will pop them)
+        for arg in args {
+            vm.push(arg);
+        }
+        vm.run()
+            .map_err(|e| VMError::new(format!("in user function: {}", e.msg)))?;
+        // The result is the last value on the stack
+        Ok(vm.pop())
     }
 
     pub fn cmo(&mut self, co: Option<CN>, fun: FN, _ip: usize) -> Result<(), VMError> {
@@ -485,17 +614,17 @@ impl V {
     }
 
     pub fn dup(&mut self) {
-        println!("!!!!!! DUP !!!!!!");
+        debug_println!("!!!!!! DUP !!!!!!");
         let node = self.s.last().expect("stack underflow").clone();
-        println!("NODE IS: {}", node);
+        debug_println!("NODE IS: {}", node);
         self.push(node);
     }
 
     pub fn ddup(&mut self) {
-        println!("!!!!!! DDUP !!!!!!");
+        debug_println!("!!!!!! DDUP !!!!!!");
         let len = self.s.len();
         let node = self.s[len - 2].clone();
-        println!("NODE IS: {}", node);
+        debug_println!("NODE IS: {}", node);
         self.push(node);
     }
 
@@ -753,10 +882,8 @@ fn nn_to_shape(nn: &NN) -> Result<Vec<usize>, VMError> {
 }
 
 /// Build a nested LIST structure from flat data and a shape.
-/// e.g. shape [2,3], data [0,1,2,3,4,5] → LIST([LIST([0,1,2]), LIST([3,4,5])])
 fn build_nested(shape: &[usize], data: &[NN]) -> NN {
     if shape.len() <= 1 {
-        // rank 0 or 1: just a flat list
         return NN::nd(E::LIST(data.to_vec()));
     }
 
@@ -779,36 +906,22 @@ fn build_nested(shape: &[usize], data: &[NN]) -> NN {
 }
 
 /// Monadic ρ: take a shape description, produce a zeroed array of that shape.
-/// Shape args are x y (cols rows), displayed as rows × cols.
-/// ρ 5     → 0 0 0 0 0
-/// ρ 3 2   → 3 wide, 2 tall:
-///             0 0 0
-///             0 0 0
 pub fn mo_rho(rhs: &NN) -> VmRes {
     let mut shape = nn_to_shape(rhs)?;
-    // Reverse: user gives [cols, rows, ...] but we store [rows, cols, ...]
     shape.reverse();
     let total: usize = shape.iter().product();
     let data: Vec<NN> = vec![NN::nd(E::INT(0)); total];
     Ok(build_nested(&shape, &data))
 }
 
-/// Dyadic ρ: reshape. Left is shape (x y = cols rows), right is data.
-/// 3 2 |ρ| !6  → 3 wide, 2 tall:
-///                 0 1 2
-///                 3 4 5
-/// 3 3 |ρ| !4  → cycles
-/// 2 2 |ρ| 7   → scalar fill
+/// Dyadic ρ: reshape.
 pub fn do_rho(lhs: &NN, rhs: &NN) -> VmRes {
     let mut shape = nn_to_shape(lhs)?;
-    // Reverse: user gives [cols, rows, ...] but we store [rows, cols, ...]
     shape.reverse();
     let total: usize = shape.iter().product();
 
-    // Get flat data from rhs
     let source: Vec<NN> = match &rhs.n {
         E::LIST(l) => l.clone(),
-        // Scalar: treat as a 1-element list that cycles
         _ => vec![rhs.clone()],
     };
 
@@ -816,7 +929,6 @@ pub fn do_rho(lhs: &NN, rhs: &NN) -> VmRes {
         return Err(VMError::new("ρ: cannot reshape empty data"));
     }
 
-    // Build data by cycling source to fill total elements
     let data: Vec<NN> = (0..total)
         .map(|i| source[i % source.len()].clone())
         .collect();

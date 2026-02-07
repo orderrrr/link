@@ -1,63 +1,62 @@
-prg       =_{SOI~exp_list~EOI}
-exp_list  =_{nline*~(exp~nline+)*~exp?}
-exp       = {asexp|train|fun|string|terms}
+// Link S-expression grammar
+//
+// Every expression is either an atom or an S-expression: (head elems...)
+// The head determines the type:
+//   λ          → lambda definition
+//   ↻          → do-block (sequence, return last)
+//   :          → assignment
+//   op/cn/name → application (train + args)
+//   literal    → list literal
+//
+// Comments: ; to end of line
 
-asexp     = {value~":"~exp}
+prg       = _{ SOI ~ sexpr ~ EOI }
 
-train     = {terms?~"|"?~fn_list~"|"~terms}
+sexpr     =  { "(" ~ inner ~ ")" | atom }
 
-dtrain    = {(value|terms)~"|"~fn_list}
-fn_list   = {texp+}
-texp      =_{dblock|block_exp|dtrain|cfn|op_exp|fnvalue|fnblock}
-dblock    = {block_exp~"|"~texp}
-block_exp = {"("~texp+~")"}
-cfn       = {(op_exp|value|block_exp|fnblock)~cn}
-fun       = {fun_om|fun_dm|fun_d|fun_m}
-fun_om    =_{texp~terms}
-fun_dm    =_{terms~texp~terms}
-fun_d     =_{terms~"|"~texp~terms}
-fun_m     =_{texp~"|"~terms}
+inner     = _{ lambda | doblock | assign | apply | list_inner }
 
-op_exp    =_{mop|op}
-mop       = {op~":"}
-op        = {
-  |"+"|"-"|"×"|"÷"
-  |"¯"  // max
-  |"_"  // min
-  |"="  // eq
-  |"&"
-  |"!"  // range 
-  |"ρ"  // shape / reshape
+lambda    =  { "λ" ~ params ~ sexpr+ }
+doblock   =  { "↻" ~ sexpr+ }
+assign    =  { ":" ~ ident ~ sexpr }
+
+// Application: head is a train (ops/combinators/names), "|" terminates the train, followed by 1+ args
+apply     =  { train ~ "|" ~ sexpr+ }
+
+// List literal: first element is a value (not an operator), all elements are sexprs
+list_inner =  { sexpr ~ sexpr* }
+
+// A train is a sequence of operators, combinators, monadic markers, and names
+// They are greedily consumed left-to-right
+train     =  { train_elem+ }
+train_elem = _{ mop | cfn | op | cn | ident }
+mop       =  { op ~ ":" }
+cfn       =  { (op | ident) ~ cn }
+
+op        =  {
+    "+" | "-" | "×" | "÷"
+  | "¯"   // max
+  | "_"   // min
+  | "="   // eq
+  | "&"   // amp / filter
+  | "!"   // range / mod
+  | "ρ"   // shape / reshape
 }
 
-cn        = {
-   "/"  // fold
-  |"\\" // scanl
-  |"ǁ"  // each
+cn        =  {
+    "/"    // fold
+  | "\\"   // scanl
+  | "ǁ"   // each
 }
 
-terms     = {term+}
-term      =_{ft|int|value|string|block|fnblockl|listblock}
+params    =  { "(" ~ ident* ~ ")" }
 
-fnblockl  =_{fnblock|fnblockm|fnblocko}
-fnblock   = {"{" ~(exp_list)~ "}"}
-fnblockm  = {"{" ~(fn_list)~"|}"}
-fnblocko  = {"{|"~(fn_list)~"|}"}
-listblock = {"[" ~(exp_list)~ "]"}
+atom      = _{ float | int | string | ident }
 
-block     = {"("~exp_list~")"}
-value     =@{letter+~(number|"_")*}
-fnvalue   =@{letter+~(number|"_")*}
+ident     = @{ (LETTER | OTHER_SYMBOL) ~ (LETTER | OTHER_SYMBOL | ASCII_DIGIT | "_")* }
+int       = @{ "-"? ~ ASCII_DIGIT+ }
+float     = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* }
+string    = @{ "\"" ~ ("\"\"" | (!("\"") ~ ANY))* ~ "\"" }
 
-int       =@{"-"?~ascii+}
-ft        =@{ascii+~"."~ascii*}
-
-string    =@{"\""~("\"\""|(!"\""~ANY))*~"\""}
-
-nline     =_{NEWLINE|";"}
-ascii     =_{ASCII_DIGIT}
-number    =_{NUMBER}
-letter    =_{LETTER|OTHER_SYMBOL}
-
-WHITESPACE=_{" "|"\t"}
-COMMENT   =_{"--"~(!"\n"~ANY)*}
+WHITESPACE = _{ " " | "\t" | NEWLINE }
+COMMENT    = _{ ";" ~ (!NEWLINE ~ ANY)* }

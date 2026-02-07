@@ -1,201 +1,191 @@
-use l::ast::CN;
 use l::{
-    self,
-    ast::{oc, od, om, E, FN, NN},
+    ast::{CN, E, FN, NN},
     parse::parse,
 };
 
-fn parse_test_lib(i: &str, ast: Vec<NN>, res: &str) {
-    let p = parse(i);
-    assert!(p.is_ok());
-    assert_eq!(p.clone().unwrap(), ast);
-    assert_eq!(format!("{}", p.unwrap()[0]), res)
+fn parse_ok(input: &str) -> Vec<NN> {
+    let p = parse(input);
+    assert!(p.is_ok(), "parse failed for '{}': {:?}", input, p.err());
+    p.unwrap()
 }
 
 #[test]
-fn negative_number_becomes_monadic() {
-    parse_test_lib(
-        "-10",
-        vec![NN::nd(E::MEXP {
-            op: vec![NN::nd(om(FN::Minus))],
-            rhs: NN::ndb(E::INT(10)),
-        })],
-        "-10",
-    )
+fn parse_int() {
+    let ast = parse_ok("42");
+    assert_eq!(ast.len(), 1);
+    assert_eq!(ast[0].n, E::INT(42));
 }
 
 #[test]
-fn negative_number_becomes_negative_when_monadic_called() {
-    parse_test_lib(
-        "!-10",
-        vec![NN::nd(E::MEXP {
-            op: NN::ndv(om(FN::Bang)),
-            rhs: NN::ndb(E::INT(-10)),
-        })],
-        "!-10",
-    )
+fn parse_negative_int() {
+    let ast = parse_ok("-10");
+    assert_eq!(ast.len(), 1);
+    assert_eq!(ast[0].n, E::INT(-10));
 }
 
 #[test]
-fn negative_number_becomes_negative_when_dyadic_called() {
-    parse_test_lib(
-        "10 + -10",
-        vec![NN::nd(E::DEXP {
-            op: NN::ndv(od(FN::Plus)),
-            lhs: NN::ndb(E::INT(10)),
-            rhs: NN::ndb(E::INT(-10)),
-        })],
-        "10+-10",
-    )
+fn parse_float() {
+    let ast = parse_ok("3.14");
+    assert_eq!(ast.len(), 1);
+    assert_eq!(ast[0].n, E::FT(3.14));
 }
 
 #[test]
-fn negative_number_becomes_negative_when_monadic_train_called() {
-    parse_test_lib(
-        "10 |+/!| -10",
-        vec![NN::nd(E::DEXP {
-            op: vec![
-                NN::nd(E::DCO {
-                    o: NN::ndb(od(FN::Plus)),
-                    co: NN::ndb(oc(CN::Fold)),
-                }),
-                NN::nd(od(FN::Bang)),
-            ],
-            lhs: NN::ndb(E::INT(10)),
-            rhs: NN::ndb(E::INT(-10)),
-        })],
-        "10|+/!|-10",
-    )
+fn parse_string() {
+    let ast = parse_ok("\"hello\"");
+    assert_eq!(ast.len(), 1);
+    assert_eq!(ast[0].n, E::ST("hello".to_string()));
 }
 
 #[test]
-fn unary_expr() {
-    let plus_one = parse("!1");
-    assert!(plus_one.is_ok());
-    assert_eq!(
-        plus_one.clone().unwrap(),
-        vec![NN::nd(E::MEXP {
-            op: NN::ndv(om(FN::Bang)),
-            rhs: NN::ndb(E::INT(1)),
-        })]
-    );
-    assert_eq!(format!("{}", plus_one.unwrap()[0]), "!1");
+fn parse_monadic_apply() {
+    // (-| 5) → APPLY { train: [MFN(Minus)], args: [INT(5)] }
+    let ast = parse_ok("(-| 5)");
+    assert_eq!(ast.len(), 1);
+    match &ast[0].n {
+        E::APPLY { train, args } => {
+            assert_eq!(train.len(), 1);
+            assert_eq!(train[0].n, E::MFN(FN::Minus));
+            assert_eq!(args.len(), 1);
+            assert_eq!(args[0].n, E::INT(5));
+        }
+        other => panic!("expected APPLY, got {:?}", other),
+    }
 }
 
 #[test]
-fn binary_expr() {
-    let sum = parse("1 + 2");
-    assert!(sum.is_ok());
-    assert_eq!(
-        sum.clone().unwrap(),
-        NN::ndv(E::DEXP {
-            op: NN::ndv(od(FN::Plus)),
-            lhs: NN::ndb(E::INT(1)),
-            rhs: NN::ndb(E::INT(2))
-        })
-    );
-    assert_eq!(format!("{}", sum.unwrap()[0]), "1+2");
-    let minus = parse("1   -  \t  2");
-    assert!(minus.is_ok());
-    assert_eq!(
-        minus.clone().unwrap(),
-        NN::ndv(E::DEXP {
-            op: NN::ndv(od(FN::Minus)),
-            lhs: NN::ndb(E::INT(1)),
-            rhs: NN::ndb(E::INT(2))
-        })
-    );
-    assert_eq!(format!("{}", minus.unwrap()[0]), "1-2");
+fn parse_dyadic_apply() {
+    // (+| 1 2) → APPLY { train: [MFN(Plus)], args: [INT(1), INT(2)] }
+    let ast = parse_ok("(+| 1 2)");
+    assert_eq!(ast.len(), 1);
+    match &ast[0].n {
+        E::APPLY { train, args } => {
+            assert_eq!(train.len(), 1);
+            assert_eq!(train[0].n, E::MFN(FN::Plus));
+            assert_eq!(args.len(), 2);
+            assert_eq!(args[0].n, E::INT(1));
+            assert_eq!(args[1].n, E::INT(2));
+        }
+        other => panic!("expected APPLY, got {:?}", other),
+    }
 }
 
 #[test]
-fn multi_expr() {
-    parse_test_lib(
-        "x:{(10+a)|+/!|10}",
-        vec![NN::nd(E::ASEXP {
-            op: NN::ndb(E::VAL(String::from("x"))),
-            rhs: NN::ndb(E::MFBLOCK(NN::ndv(E::DEXP {
-                op: vec![
-                    NN::nd(E::DCO {
-                        o: NN::ndb(od(FN::Plus)),
-                        co: NN::ndb(oc(CN::Fold)),
-                    }),
-                    NN::nd(od(FN::Bang)),
-                ],
-                lhs: NN::ndb(E::BL(NN::ndb(E::DEXP {
-                    op: NN::ndv(od(FN::Plus)),
-                    lhs: NN::ndb(E::INT(10)),
-                    rhs: NN::ndb(E::VAL(String::from("a"))),
-                }))),
-                rhs: NN::ndb(E::INT(10)),
-            }))),
-        })],
-        "x:{(10+a)|+/!|10}",
-    );
-    parse_test_lib(
-        "10! -10",
-        vec![NN::nd(E::DEXP {
-            op: NN::ndv(od(FN::Bang)),
-            lhs: NN::ndb(E::INT(10)),
-            rhs: NN::ndb(E::INT(-10)),
-        })],
-        "10!-10",
-    );
-    parse_test_lib(
-        "+/10 10",
-        vec![NN::nd(E::MEXP {
-            op: NN::ndv(E::MCO {
-                o: NN::ndb(om(FN::Plus)),
-                co: NN::ndb(oc(CN::Fold)),
-            }),
-            rhs: NN::ndb(E::LIST(vec![NN::nd(E::INT(10)), NN::nd(E::INT(10))])),
-        })],
-        "+/10 10",
-    );
-    parse_test_lib(
-        "a:x| 10",
-        vec![NN::nd(E::ASEXP {
-            op: NN::ndb(E::VAL(String::from("a"))),
-            rhs: NN::ndb(E::MEXP {
-                op: NN::ndv(E::FVAL(String::from("x"))),
-                rhs: NN::ndb(E::INT(10)),
-            }),
-        })],
-        "a:x10", // TODO fix printing
-    );
+fn parse_train() {
+    // (+/!| 10) → APPLY { train: [MCO{+,/}, MFN(!)], args: [INT(10)] }
+    let ast = parse_ok("(+/!| 10)");
+    assert_eq!(ast.len(), 1);
+    match &ast[0].n {
+        E::APPLY { train, args } => {
+            assert_eq!(train.len(), 2);
+            // First element: +/ (MCO)
+            match &train[0].n {
+                E::MCO { o, co } => {
+                    assert_eq!(o.n, E::MFN(FN::Plus));
+                    assert_eq!(co.n, E::CN(CN::Fold));
+                }
+                other => panic!("expected MCO, got {:?}", other),
+            }
+            // Second element: ! (MFN)
+            assert_eq!(train[1].n, E::MFN(FN::Bang));
+            // Arg
+            assert_eq!(args.len(), 1);
+            assert_eq!(args[0].n, E::INT(10));
+        }
+        other => panic!("expected APPLY, got {:?}", other),
+    }
 }
 
 #[test]
-fn list_block() {
-    parse_test_lib(
-        "[1;2;3]",
-        vec![NN::nd(E::LIST(vec![
-            NN::nd(E::INT(1)),
-            NN::nd(E::INT(2)),
-            NN::nd(E::INT(3)),
-        ]))],
-        "1 2 3",
-    );
+fn parse_list_literal() {
+    // (1 2 3) → LIST
+    let ast = parse_ok("(1 2 3)");
+    assert_eq!(ast.len(), 1);
+    match &ast[0].n {
+        E::LIST(elems) => {
+            assert_eq!(elems.len(), 3);
+            assert_eq!(elems[0].n, E::INT(1));
+            assert_eq!(elems[1].n, E::INT(2));
+            assert_eq!(elems[2].n, E::INT(3));
+        }
+        other => panic!("expected LIST, got {:?}", other),
+    }
+}
 
-    parse_test_lib(
-        "[1 2 3;2 3 4;3 4 5]",
-        vec![NN::nd(E::LIST(vec![
-            NN::nd(E::LIST(vec![
-                NN::nd(E::INT(1)),
-                NN::nd(E::INT(2)),
-                NN::nd(E::INT(3)),
-            ])),
-            NN::nd(E::LIST(vec![
-                NN::nd(E::INT(2)),
-                NN::nd(E::INT(3)),
-                NN::nd(E::INT(4)),
-            ])),
-            NN::nd(E::LIST(vec![
-                NN::nd(E::INT(3)),
-                NN::nd(E::INT(4)),
-                NN::nd(E::INT(5)),
-            ])),
-        ]))],
-        "1 2 3\n2 3 4\n3 4 5",
-    )
+#[test]
+fn parse_nested_list() {
+    // ((1 2) (3 4)) → LIST of LISTs
+    let ast = parse_ok("((1 2) (3 4))");
+    assert_eq!(ast.len(), 1);
+    match &ast[0].n {
+        E::LIST(rows) => {
+            assert_eq!(rows.len(), 2);
+            match &rows[0].n {
+                E::LIST(r) => {
+                    assert_eq!(r.len(), 2);
+                    assert_eq!(r[0].n, E::INT(1));
+                    assert_eq!(r[1].n, E::INT(2));
+                }
+                other => panic!("expected inner LIST, got {:?}", other),
+            }
+        }
+        other => panic!("expected LIST, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_lambda() {
+    // (λ (x) (+| x 1))
+    let ast = parse_ok("(λ (x) (+| x 1))");
+    assert_eq!(ast.len(), 1);
+    match &ast[0].n {
+        E::LAMBDA { params, body } => {
+            assert_eq!(params, &vec!["x".to_string()]);
+            assert_eq!(body.len(), 1);
+        }
+        other => panic!("expected LAMBDA, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_doblock() {
+    // (↻ (: x 5) (+| x 3))
+    let ast = parse_ok("(↻ (: x 5) (+| x 3))");
+    assert_eq!(ast.len(), 1);
+    match &ast[0].n {
+        E::DOBLOCK(exprs) => {
+            assert_eq!(exprs.len(), 2);
+            // First: assignment
+            match &exprs[0].n {
+                E::ASEXP { name, rhs } => {
+                    assert_eq!(name, "x");
+                    assert_eq!(rhs.n, E::INT(5));
+                }
+                other => panic!("expected ASEXP, got {:?}", other),
+            }
+        }
+        other => panic!("expected DOBLOCK, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_assign() {
+    // (: x 42)
+    let ast = parse_ok("(: x 42)");
+    assert_eq!(ast.len(), 1);
+    match &ast[0].n {
+        E::ASEXP { name, rhs } => {
+            assert_eq!(name, "x");
+            assert_eq!(rhs.n, E::INT(42));
+        }
+        other => panic!("expected ASEXP, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_comment() {
+    // 42 with a comment
+    let ast = parse_ok("; this is a comment\n42");
+    assert_eq!(ast.len(), 1);
+    assert_eq!(ast[0].n, E::INT(42));
 }
