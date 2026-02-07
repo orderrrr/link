@@ -34,6 +34,8 @@ const GREY: &str = "\x1b[90m"; // comments, pipes
 /// Longer names must come first to avoid partial matches
 /// (e.g. "scanl" before "scan")
 const ALIASES: &[(&str, &str)] = &[
+    ("add", "+"),
+    ("neg", "-"),
     ("max", "¯"),
     ("min", "_"),
     ("mod", "!"),
@@ -42,67 +44,92 @@ const ALIASES: &[(&str, &str)] = &[
     ("eq", "="),
     ("amp", "&"),
     ("rho", "ρ"),
+    ("mon", ":"),
     ("each", "ǁ"),
     ("fold", "/"),
     ("scanl", "\\"),
 ];
 
+/// Check if a string starting at position `pos` in `chars` matches any alias name.
+/// Used to determine word boundaries — an alias adjacent to another alias is OK.
+fn is_alias_start(chars: &[char], pos: usize) -> bool {
+    ALIASES.iter().any(|(name, _)| {
+        let name_chars: Vec<char> = name.chars().collect();
+        if pos + name_chars.len() > chars.len() {
+            return false;
+        }
+        (0..name_chars.len()).all(|j| chars[pos + j] == name_chars[j])
+    })
+}
+
 /// Replace all ASCII aliases with their unicode counterparts.
-/// Only replaces when the alias appears as a standalone word
-/// (not inside a string literal or a longer identifier).
+/// Aliases can be chained without spaces (e.g. "rhomodmon" → "ρ!:").
+/// Does not replace inside string literals.
 fn replace_aliases(input: &str) -> String {
     let mut result = input.to_string();
-    for &(name, symbol) in ALIASES {
-        let mut out = String::with_capacity(result.len());
-        let chars: Vec<char> = result.chars().collect();
-        let len = chars.len();
-        let name_chars: Vec<char> = name.chars().collect();
-        let name_len = name_chars.len();
-        let mut i = 0;
-        let mut in_string = false;
+    let mut changed = true;
 
-        while i < len {
-            // Track string literals — don't replace inside them
-            if chars[i] == '"' {
-                in_string = !in_string;
-                out.push(chars[i]);
-                i += 1;
-                continue;
-            }
+    // Loop until no more replacements — handles chained aliases
+    // where replacing one exposes boundaries for the next
+    while changed {
+        changed = false;
+        for &(name, symbol) in ALIASES {
+            let mut out = String::with_capacity(result.len());
+            let chars: Vec<char> = result.chars().collect();
+            let len = chars.len();
+            let name_chars: Vec<char> = name.chars().collect();
+            let name_len = name_chars.len();
+            let mut i = 0;
+            let mut in_string = false;
 
-            if in_string {
-                out.push(chars[i]);
-                i += 1;
-                continue;
-            }
+            while i < len {
+                // Track string literals — don't replace inside them
+                if chars[i] == '"' {
+                    in_string = !in_string;
+                    out.push(chars[i]);
+                    i += 1;
+                    continue;
+                }
 
-            // Check if the alias matches at this position
-            if i + name_len <= len {
-                let slice_matches = (0..name_len).all(|j| chars[i + j] == name_chars[j]);
+                if in_string {
+                    out.push(chars[i]);
+                    i += 1;
+                    continue;
+                }
 
-                if slice_matches {
-                    // Check that it's not part of a longer identifier:
-                    // char before must not be a letter or underscore
-                    let before_ok =
-                        i == 0 || !(chars[i - 1].is_alphabetic() || chars[i - 1] == '_');
-                    // char after must not be a letter or underscore
-                    // (digits are fine — rho5 should become ρ5)
-                    let after_ok = i + name_len >= len
-                        || !(chars[i + name_len].is_alphabetic() || chars[i + name_len] == '_');
+                // Check if the alias matches at this position
+                if i + name_len <= len {
+                    let slice_matches = (0..name_len).all(|j| chars[i + j] == name_chars[j]);
 
-                    if before_ok && after_ok {
-                        out.push_str(symbol);
-                        i += name_len;
-                        continue;
+                    if slice_matches {
+                        // char before must not be a letter or underscore
+                        // (unless it's a non-ASCII letter like ρ — those are symbols we inserted)
+                        let before_ok = i == 0
+                            || !(chars[i - 1].is_alphabetic()
+                                && chars[i - 1].is_ascii()
+                                && chars[i - 1] != '_');
+                        // char after must not be a letter/underscore that ISN'T the start of another alias
+                        let after_ok = i + name_len >= len
+                            || !(chars[i + name_len].is_alphabetic()
+                                && chars[i + name_len].is_ascii()
+                                && chars[i + name_len] != '_')
+                            || is_alias_start(&chars, i + name_len);
+
+                        if before_ok && after_ok {
+                            out.push_str(symbol);
+                            i += name_len;
+                            changed = true;
+                            continue;
+                        }
                     }
                 }
+
+                out.push(chars[i]);
+                i += 1;
             }
 
-            out.push(chars[i]);
-            i += 1;
+            result = out;
         }
-
-        result = out;
     }
     result
 }
@@ -311,8 +338,8 @@ fn main() {
         let readline = rl.readline(">> ");
         match readline {
             Ok(line) => {
-                let _ = rl.add_history_entry(&line);
                 let line = replace_aliases(&line);
+                let _ = rl.add_history_entry(&line);
                 let byte_code = I::fstring(&line);
 
                 match byte_code {

@@ -84,83 +84,182 @@ f: {=}; f!|1 0 1 0 -- f is a function, used monadically in a train
 
 ## Data Types
 
-Type      | Syntax          | Examples
----       | ---             | ---
-Integer   | digits          | `42`, `-3`
-Float     | digits`.`digits | `3.14`, `0.5`
-String    | `"..."`         | `"hello world"`
-List      | space-separated | `1 2 3`, `"a" "b" "c"`
+Type      | Syntax            | Examples
+---       | ---               | ---
+Integer   | digits            | `42`, `-3`
+Float     | digits`.`digits   | `3.14`, `0.5`
+String    | `"..."`           | `"hello world"`
+List      | space-separated   | `1 2 3`, `"a" "b" "c"`
 List      | `[`;`-separated]` | `[1;2 3;4 5 6]` (nested)
-Boolean   | (internal)      | produced by `=` and comparisons
+Boolean   | (internal)        | produced by `=` and comparisons
 
-Negative numbers use `_` as a prefix in some contexts (e.g., `_3` for -3 in terms), or standard `-` as a monadic operator.
+## Primitives
 
-## Primitive Functions
+Every primitive has a symbol, an ASCII alias (usable in the REPL), and up to two meanings depending on whether it is applied monadically (one argument) or dyadically (two arguments).
 
-### Monadic (unary)
+### Operators
 
-Symbol | Name          | Description                        | Example
----    | ---           | ---                                | ---
-`-`    | Negate        | Negates a number                   | `-5` => `-5`
-`!`    | Range         | Integers from 0 to n-1             | `!4` => `0 1 2 3`
-`=`    | Boolean Flip  | 0 becomes 1, nonzero becomes 0     | `=0` => `1`, `=5` => `0`
-`_`    | Floor         | Floors a float to an integer       | `_3.7` => `3`
+Symbol | Alias | Name       | Monadic (unary)               | Dyadic (binary)
+---    | ---   | ---        | ---                           | ---
+`+`    | `add` | Plus       | *not yet implemented*         | Add
+`-`    | `neg` | Minus      | Negate                        | Subtract
+`×`    | `mul` | Times      | *not yet implemented*         | *not yet implemented*
+`÷`    | `div` | Divide     | *not yet implemented*         | *not yet implemented*
+`¯`    | `max` | Max        | *not yet implemented*         | Maximum of two values
+`_`    | `min` | Min/Floor  | Floor (float to int)          | Minimum of two values
+`=`    | `eq`  | Equal/Flip | Boolean flip (0 becomes 1)    | *not yet implemented*
+`&`    | `amp` | Amp        | *not yet implemented*         | Filter by boolean mask
+`!`    | `mod` | Bang       | Range (0 to n-1)              | Modulo
+`ρ`    | `rho` | Rho        | Create zeroed array by shape  | Reshape data to shape
 
-### Dyadic (binary)
+### Modifiers
 
-Symbol | Name     | Description                          | Example
----    | ---      | ---                                  | ---
-`+`    | Add      | Element-wise addition                | `2 + 3` => `5`
-`-`    | Subtract | Element-wise subtraction             | `5 - 2` => `3`
-`¯`    | Max      | Maximum of two values                | `3 ¯ 5` => `5`
-`_`    | Min      | Minimum of two values                | `3 _ 5` => `3`
-`!`    | Modulo   | Remainder                            | `3 ! 10` => `1`
-`&`    | Filter   | Filter list by boolean mask          | (see combinators)
+Symbol | Name             | Description
+---    | ---              | ---
+`:`    | Monadic Override | Forces an operator to be monadic inside a dyadic train
 
-List operations are element-wise when both sides are lists of equal length:
+In a dyadic train (`value|train|value`), all operators default to dyadic. Suffix an operator with `:` to force it monadic -- it will only receive the right argument.
 
 ```
-1 2 3 |+| 4 5 6    -- => 5 7 9
+3 2|ρ!:|6              -- !: forces ! to be monadic (range)
+                       -- so !: takes only 6 => 0 1 2 3 4 5
+                       -- then ρ reshapes dyadically with 3 2
+                       -- result: 3 wide, 2 tall matrix
 ```
 
-### Not Yet Implemented
+Without `:`, the `!` in `3 2|ρ!|6` would be dyadic (modulo), receiving both `3 2` and `6`.
 
-Symbol | Monadic         | Dyadic
----    | ---             | ---
-`+`    | Increment       | --
-`×`    | --              | Multiply
-`÷`    | --              | Divide
-`=`    | --              | Equal
+### Combinators
 
-## Combinators (Higher-Order Functions)
+Symbol | Alias   | Name  | Description
+---    | ---     | ---   | ---
+`/`    | `fold`  | Fold  | Reduce a list with a dyadic function
+`\`    | `scanl` | ScanL | Each-left / outer product
+`ǁ`    | `each`  | Each  | *not yet implemented*
 
-Combinators modify how a function is applied.
+### REPL Aliases
 
-Symbol | Name   | Description
----    | ---    | ---
-`/`    | Fold   | Reduce a list using a dyadic function
-`\`    | ScanL  | Apply each-left / outer product
+In the REPL, you can type the ASCII alias instead of the unicode symbol. It will be replaced with the symbol when you press Enter. For example, typing `rho5` is equivalent to `ρ5`.
+
+Alias   | Symbol | Name
+---     | ---    | ---
+`add`   | `+`    | Plus
+`neg`   | `-`    | Minus
+`mul`   | `×`    | Times
+`div`   | `÷`    | Divide
+`max`   | `¯`    | Max
+`min`   | `_`    | Min/Floor
+`eq`    | `=`    | Equal/Flip
+`amp`   | `&`    | Amp
+`mod`   | `!`    | Bang
+`rho`   | `ρ`    | Rho
+`mon`   | `:`    | Monadic Override
+`fold`  | `/`    | Fold
+`scanl` | `\`    | ScanL
+`each`  | `ǁ`    | Each
+
+## Operators in Detail
+
+### `-` Negate / Subtract
+
+```
+-2                  -- => -2
+1 - 2               -- => -1 (note: dyadic uses pipe syntax)
+```
+
+### `!` Range / Modulo
+
+```
+!4                  -- => 0 1 2 3
+```
+
+### `=` Boolean Flip
+
+```
+=0                  -- => 1
+=5                  -- => 0
+=0 1 0 1            -- => 1 0 1 0
+```
+
+### `_` Floor / Min
+
+```
+_3.7                -- => 3 (floor)
+```
+
+### `&` Filter
+
+Used dyadically with a boolean mask on the left and a list on the right:
+
+```
+-- filter keeps elements where mask is true
+```
+
+### `ρ` Shape / Reshape
+
+Monadic `ρ` creates a zeroed array from a shape description. Arguments are x y (width, height):
+
+```
+ρ 5                 -- => 0 0 0 0 0
+ρ 3 2               -- => 3 wide, 2 tall:
+                    --    0 0 0
+                    --    0 0 0
+```
+
+Dyadic `ρ` reshapes data into the given shape. Left is shape (x y), right is data:
+
+```
+3 2|ρ|0 1 2 3 4 5;  -- => 3 wide, 2 tall:
+                     --    0 1 2
+                     --    3 4 5
+
+3 3|ρ|0 1 2 3;      -- data cycles to fill:
+                     --    0 1 2
+                     --    3 0 1
+                     --    2 3 0
+
+5 5|ρ|0;             -- scalar fills entire array:
+                     --    0 0 0 0 0
+                     --    0 0 0 0 0
+                     --    0 0 0 0 0
+                     --    0 0 0 0 0
+                     --    0 0 0 0 0
+```
+
+Compose `ρ` with `!` using the monadic override `:` to reshape a range:
+
+```
+3 2|ρ!:|6            -- !: forces range (monadic) on 6
+                     -- then ρ reshapes to 3 wide, 2 tall:
+                     --    0 1 2
+                     --    3 4 5
+
+5 5|ρ!:|25           -- 5x5 matrix of 0..24:
+                     --     0  1  2  3  4
+                     --     5  6  7  8  9
+                     --    10 11 12 13 14
+                     --    15 16 17 18 19
+                     --    20 21 22 23 24
+```
+
+## Combinators in Detail
 
 ### Fold `/`
 
 Reduces a list to a single value:
 
 ```
-+/!|10       -- sum of 0..10 => 45
++/!|10              -- sum of 0..10 => 45
 ```
 
-The function to the left of `/` is used as the reducer. In a monadic context (applied to a single list), fold reduces the list:
-
-```
-|+/!|10      -- range 10, then fold with +
-```
+The function to the left of `/` is used as the reducer.
 
 ### ScanL `\`
 
 Applies a dyadic function across elements. When used dyadically with a list on the left and a value on the right, it maps each element of the left against the right:
 
 ```
-3 5|\!|10    -- each of [3, 5] modulo'd against range(10)
+3 5|\!|10           -- each of [3, 5] modulo'd against range(10)
 ```
 
 ## Trains
@@ -176,7 +275,7 @@ Trains are the core composition mechanism. A train is a sequence of functions th
 Functions are applied right to left:
 
 ```
-|+/!|1000    -- range(1000), then fold with +
+|+/!|1000           -- range(1000), then fold with +
 ```
 
 ### Dyadic Trains
@@ -192,9 +291,7 @@ Both arguments are available to the functions in the train.
 Parentheses group sub-trains within a larger train:
 
 ```
-+/(^/=3 5|!.\)|&!|1000
-     ^^^^^^^^^^
-     this is a sub-train
++/(¯/=3 5|!\)|&!|1000
 ```
 
 ### Dyadic Train Blocks
@@ -202,7 +299,7 @@ Parentheses group sub-trains within a larger train:
 A value followed by `|` inside a train temporarily makes that segment dyadic:
 
 ```
-3 5|!\    -- 3 5 is the left arg for the dyadic segment
+3 5|!\              -- 3 5 is the left arg for the dyadic segment
 ```
 
 ## Function Blocks
@@ -217,7 +314,7 @@ Variable | Role
 ### Monadic Function Block `{...}`
 
 ```
-{-a}|5       -- negate the argument => -5
+{-a}|5              -- negate the argument => -5
 ```
 
 If the block body does not reference `w`, it is treated as monadic.
@@ -227,17 +324,17 @@ If the block body does not reference `w`, it is treated as monadic.
 A monadic function block written in tacit (point-free) style:
 
 ```
-{+/!|}       -- equivalent to |+/!|
+{+/!|}              -- equivalent to |+/!|
 ```
 
 The trailing `|` marks it as a tacit train applied to the argument.
 
-### Tacit Dyadic Function Block `{|...|}` 
+### Tacit Dyadic Function Block `{|...|}`
 
 A dyadic function block in tacit style:
 
 ```
-{|+|}        -- equivalent to w + a
+{|+|}               -- equivalent to w + a
 ```
 
 ### Assignment
@@ -250,6 +347,23 @@ fn: {+/!|}
 3 5 |fn| 1000
 ```
 
+## Array Display
+
+2D arrays are displayed as right-aligned grids:
+
+```
+>> 3 2|ρ|1 2 3 10 20 30;
+ 1  2  3
+10 20 30
+```
+
+1D lists are displayed space-separated:
+
+```
+>> !5
+0 1 2 3 4
+```
+
 ## Blocks and Grouping
 
 Syntax      | Purpose
@@ -260,12 +374,25 @@ Syntax      | Purpose
 `[...;...]` | List block (`;`-separated elements, supports nesting)
 `(...)`     | Expression/train grouping block
 `"..."`     | String literal (double `""` for escape)
+`op:`       | Monadic override (force operator to monadic in dyadic context)
 
 ## Comments
 
 ```
 -- this is a comment
 x: 42 -- inline comment
+```
+
+## Error Handling
+
+Type mismatches and unsupported operations produce runtime errors instead of crashing:
+
+```
+>> -"foo"
+runtime error: - (negate) expects int or float, got string
+
+>> !"hello"
+runtime error: ! (range) expects int, got string
 ```
 
 ## VM Architecture
@@ -317,4 +444,20 @@ These are tested and verified:
 
 -- strings
 "hello world"           -- => "hello world"
+
+-- create a 3x2 zero matrix
+ρ 3 2                   -- => 0 0 0
+                        --    0 0 0
+
+-- reshape with explicit data
+3 2|ρ|0 1 2 3 4 5;     -- => 0 1 2
+                        --    3 4 5
+
+-- reshape with range using monadic override
+3 2|ρ!:|6              -- => 0 1 2
+                        --    3 4 5
+
+-- scalar fill
+2 2|ρ|7;               -- => 7 7
+                        --    7 7
 ```
