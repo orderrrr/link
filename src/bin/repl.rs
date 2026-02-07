@@ -123,8 +123,8 @@ impl LinkHighlighter {
         while i < len {
             let ch = chars[i];
 
-            // Check for alias keywords — color them but keep original text
-            // (rustyline requires highlight output to have same display width as input)
+            // Check for alias keywords — color them as their target operator type
+            // but keep the original text (rustyline requires same display width)
             if ch.is_ascii_alphabetic() {
                 if let Some((name, symbol)) = ALIASES.iter().find(|(name, _)| {
                     let name_chars: Vec<char> = name.chars().collect();
@@ -146,17 +146,12 @@ impl LinkHighlighter {
                         "/" | "\\" | "ǁ" => MAGENTA,
                         _ => CYAN,
                     };
-                    // Show the unicode symbol, then pad with spaces to keep
-                    // the same display width as the original alias text
                     out.push_str(color);
-                    out.push_str(symbol);
-                    out.push_str(RESET);
-                    // Pad: alias was name.len() display columns wide,
-                    // symbol is 1 display column wide
-                    for _ in 1..name.len() {
-                        out.push(' ');
+                    for _ in 0..name.len() {
+                        out.push(chars[i]);
+                        i += 1;
                     }
-                    i += name.len();
+                    out.push_str(RESET);
                     continue;
                 }
             }
